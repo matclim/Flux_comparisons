@@ -28,9 +28,9 @@
 //     too few files.  Files are the natural correlated block in a FairShip
 //     production; using them propagates per-file correlations into the error
 //     bars automatically, instead of the ad-hoc error inflation factor.
- 
+
 #pragma once
- 
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -41,30 +41,30 @@
 #include <string>
 #include <thread>
 #include <vector>
- 
-namespace mfc {
- 
+
+namespace fluxval {
+
 // ---------------------------------------------------------------------------
 // Small utilities
 // ---------------------------------------------------------------------------
- 
+
 inline double sumW(const std::vector<double>& w) {
   double s = 0.0;
   for (double v : w) s += v;
   return s;
 }
- 
+
 /// Kish effective sample size (sum w)^2 / sum w^2 -- the real statistics.
 inline double nEff(const std::vector<double>& w) {
   double s = 0.0, s2 = 0.0;
   for (double v : w) { s += v; s2 += v * v; }
   return (s2 > 0.0) ? s * s / s2 : 0.0;
 }
- 
+
 inline double nEffFrom(double s, double s2) {
   return (s2 > 0.0) ? s * s / s2 : 0.0;
 }
- 
+
 /// Run f(i) for i in [0,n) across `nthreads` threads (1 => serial, 0 => auto).
 template <typename F>
 inline void parallelFor(std::size_t n, int nthreads, F&& f) {
@@ -84,11 +84,11 @@ inline void parallelFor(std::size_t n, int nthreads, F&& f) {
   }
   for (auto& th : pool) th.join();
 }
- 
+
 // ---------------------------------------------------------------------------
 // One sample, flattened to muon rows
 // ---------------------------------------------------------------------------
- 
+
 /// Column-major muon table.  `var[j]` holds variable j for every row.
 /// `event` and `file` are the two candidate resampling units; both are
 /// compacted to contiguous 0-based ids by compactUnits().
@@ -101,9 +101,9 @@ struct Sample {
   std::vector<int> event;                // contiguous event id
   std::vector<int> file;                 // contiguous file id
   int nEvents = 0, nFiles = 0;
- 
+
   std::size_t rows() const { return w.size(); }
- 
+
   void compactUnits() {
     auto compact = [](std::vector<int>& v) {
       if (v.empty()) return 0;
@@ -117,7 +117,7 @@ struct Sample {
     nEvents = compact(event);
     nFiles = compact(file);
   }
- 
+
   /// Rescale every weight so that sum(w) == 1.  Called before any pooling:
   /// after this, an A row and a B row are on the same scale and may legally be
   /// exchanged by a permutation.  Returns the original total.
@@ -128,7 +128,7 @@ struct Sample {
     return s;
   }
 };
- 
+
 /// Copy the rows of one charge.  Units are recompacted; the caller must
 /// re-normalise the weights afterwards.
 inline Sample filterCharge(const Sample& S, int charge) {
@@ -148,7 +148,7 @@ inline Sample filterCharge(const Sample& S, int charge) {
   O.compactUnits();
   return O;
 }
- 
+
 /// Split a sample into two halves along whole events.  Used for the closure
 /// test: running A1 vs A2 through the identical pipeline must give a flat
 /// p-value.  Any structure found there is a pipeline artefact, not physics.
@@ -156,7 +156,7 @@ inline std::pair<Sample, Sample> splitEvents(const Sample& S, uint64_t seed) {
   std::vector<uint8_t> side(S.nEvents);
   std::mt19937_64 rng(seed);
   for (int e = 0; e < S.nEvents; ++e) side[e] = static_cast<uint8_t>(rng() & 1u);
- 
+
   Sample A, B;
   for (Sample* p : {&A, &B}) {
     p->nvar = S.nvar;
@@ -176,11 +176,11 @@ inline std::pair<Sample, Sample> splitEvents(const Sample& S, uint64_t seed) {
   B.compactUnits();
   return {A, B};
 }
- 
+
 // ---------------------------------------------------------------------------
 // Weighted quantiles and binning
 // ---------------------------------------------------------------------------
- 
+
 /// Weighted quantiles of v.  `probs` must be sorted ascending in (0,1).
 inline std::vector<double> weightedQuantiles(const std::vector<double>& v,
                                              const std::vector<double>& w,
@@ -189,12 +189,12 @@ inline std::vector<double> weightedQuantiles(const std::vector<double>& v,
   std::vector<std::size_t> idx(n);
   std::iota(idx.begin(), idx.end(), 0);
   std::sort(idx.begin(), idx.end(), [&](std::size_t a, std::size_t b) { return v[a] < v[b]; });
- 
+
   double tot = 0.0;
   for (double x : w) tot += x;
   std::vector<double> out(probs.size(), v.empty() ? 0.0 : v[idx.front()]);
   if (!(tot > 0.0) || n == 0) return out;
- 
+
   double cum = 0.0;
   std::size_t p = 0;
   for (std::size_t k = 0; k < n && p < probs.size(); ++k) {
@@ -204,7 +204,7 @@ inline std::vector<double> weightedQuantiles(const std::vector<double>& v,
   for (; p < probs.size(); ++p) out[p] = v[idx.back()];
   return out;
 }
- 
+
 /// Bin edges placed so that each bin holds an equal share of the POOLED
 /// weight.  Equal-N_eff-ish bins: the tails get wide bins with real statistics
 /// in them instead of a row of empty fine bins that a ratio plot cannot use.
@@ -215,14 +215,14 @@ inline std::vector<double> equalWeightEdges(const std::vector<double>& v,
   probs.reserve(nbins - 1);
   for (int k = 1; k < nbins; ++k) probs.push_back(double(k) / nbins);
   std::vector<double> inner = weightedQuantiles(v, w, probs);
- 
+
   const auto mm = std::minmax_element(v.begin(), v.end());
   std::vector<double> e;
   e.reserve(nbins + 1);
   e.push_back(*mm.first);
   for (double x : inner) e.push_back(x);
   e.push_back(std::nextafter(*mm.second, *mm.second + 1.0));
- 
+
   // Heavy ties (x exactly 0, say) collapse edges; drop the duplicates rather
   // than carry zero-width bins that make dH == 0.
   e.erase(std::unique(e.begin(), e.end()), e.end());
@@ -233,7 +233,7 @@ inline std::vector<double> equalWeightEdges(const std::vector<double>& v,
   }
   return e;
 }
- 
+
 inline int binOf(const std::vector<double>& edges, double x) {
   const int nb = static_cast<int>(edges.size()) - 1;
   if (x < edges.front()) return 0;
@@ -241,11 +241,11 @@ inline int binOf(const std::vector<double>& edges, double x) {
   int k = static_cast<int>(std::upper_bound(edges.begin(), edges.end(), x) - edges.begin()) - 1;
   return std::max(0, std::min(nb - 1, k));
 }
- 
+
 // ---------------------------------------------------------------------------
 // Pooled, binned, unit-compressed representation for the shape tests
 // ---------------------------------------------------------------------------
- 
+
 /// Compressed sparse rows: for each permutation unit, the list of (bin, weight)
 /// it contributes.  Entries sharing a (unit,bin) are merged once, up front, so
 /// a permutation costs one pass over the compressed entries rather than over
@@ -261,7 +261,7 @@ struct PooledVar {
   std::vector<double> uSw2;   // per unit: sum w^2
   std::vector<uint8_t> label; // per unit: 0 = A, 1 = B  (observed labelling)
 };
- 
+
 /// Build the pooled representation of variable `j`.
 /// `unitsAreFiles` picks the permutation unit; events are the default.
 /// PRECONDITION: A.w and B.w have each been normalised to unit sum.
@@ -269,7 +269,7 @@ inline PooledVar buildPooled(const Sample& A, const Sample& B, int j, int nbins,
                              bool unitsAreFiles = false) {
   const auto& vA = A.var.at(j);
   const auto& vB = B.var.at(j);
- 
+
   std::vector<double> vAll;
   std::vector<double> wAll;
   vAll.reserve(vA.size() + vB.size());
@@ -278,17 +278,17 @@ inline PooledVar buildPooled(const Sample& A, const Sample& B, int j, int nbins,
   vAll.insert(vAll.end(), vB.begin(), vB.end());
   wAll.insert(wAll.end(), A.w.begin(), A.w.end());
   wAll.insert(wAll.end(), B.w.begin(), B.w.end());
- 
+
   PooledVar P;
   P.edges = equalWeightEdges(vAll, wAll, nbins);
   P.nbins = static_cast<int>(P.edges.size()) - 1;
- 
+
   const int nUA = unitsAreFiles ? A.nFiles : A.nEvents;
   const int nUB = unitsAreFiles ? B.nFiles : B.nEvents;
   P.nUnits = nUA + nUB;
   P.label.assign(P.nUnits, 0);
   for (int u = nUA; u < P.nUnits; ++u) P.label[u] = 1;
- 
+
   // (unit, bin, w) triples, then sort+merge.
   struct Ent { int u; uint16_t b; double w; };
   std::vector<Ent> ent;
@@ -299,21 +299,21 @@ inline PooledVar buildPooled(const Sample& A, const Sample& B, int j, int nbins,
     ent.push_back({uA[i], static_cast<uint16_t>(binOf(P.edges, vA[i])), A.w[i]});
   for (std::size_t i = 0; i < vB.size(); ++i)
     ent.push_back({nUA + uB[i], static_cast<uint16_t>(binOf(P.edges, vB[i])), B.w[i]});
- 
+
   std::sort(ent.begin(), ent.end(), [](const Ent& a, const Ent& b) {
     return a.u != b.u ? a.u < b.u : a.b < b.b;
   });
- 
+
   P.off.assign(P.nUnits + 1, 0);
   P.uSw.assign(P.nUnits, 0.0);
   P.uSw2.assign(P.nUnits, 0.0);
   P.bin.reserve(ent.size());
   P.wgt.reserve(ent.size());
- 
+
   // sum w^2 must be accumulated over MUONS, not over merged (unit,bin) cells:
   // N_eff is a property of the weights, not of the binning.
   for (const Ent& e : ent) { P.uSw[e.u] += e.w; P.uSw2[e.u] += e.w * e.w; }
- 
+
   int cur = -1;
   for (std::size_t i = 0; i < ent.size(); ++i) {
     if (ent[i].u != cur) {
@@ -331,17 +331,17 @@ inline PooledVar buildPooled(const Sample& A, const Sample& B, int j, int nbins,
   for (int u = cur + 1; u <= P.nUnits; ++u) P.off[u] = static_cast<int>(P.bin.size());
   return P;
 }
- 
+
 // ---------------------------------------------------------------------------
 // Weighted two-sample EDF statistics
 // ---------------------------------------------------------------------------
- 
+
 struct Stat {
   double AD = 0.0;   // Anderson-Darling: 1/(H(1-H)) tail weighting
   double CvM = 0.0;  // Cramer-von Mises: flat weighting, tame in the tails
   double KS = 0.0;   // Kolmogorov-Smirnov: supremum, blind to the tails
 };
- 
+
 /// Two-sample EDF statistics from binned weighted histograms.
 ///
 ///   A^2   = (nA nB / N) * sum (F_A - F_B)^2 / (H (1-H)) dH
@@ -366,7 +366,7 @@ inline Stat statFromHists(const double* hA, const double* hB, int nb, double nA,
   double sA = 0.0, sB = 0.0;
   for (int k = 0; k < nb; ++k) { sA += hA[k]; sB += hB[k]; }
   if (!(sA > 0.0) || !(sB > 0.0) || !(nA > 0.0) || !(nB > 0.0)) return s;
- 
+
   const double pref = nA * nB / (nA + nB);
   const double rA = nA / (nA + nB), rB = nB / (nA + nB);
   double FA = 0.0, FB = 0.0, Hprev = 0.0, maxd = 0.0;
@@ -394,7 +394,7 @@ inline Stat statFromHists(const double* hA, const double* hB, int nb, double nA,
   s.KS = std::sqrt(pref) * maxd;
   return s;
 }
- 
+
 /// Fill hA/hB (size nbins each) for a given per-unit labelling.
 inline void fillByLabel(const PooledVar& P, const uint8_t* lab, double* hA, double* hB,
                         double& nAout, double& nBout) {
@@ -410,7 +410,7 @@ inline void fillByLabel(const PooledVar& P, const uint8_t* lab, double* hA, doub
   nAout = nEffFrom(sA, s2A);
   nBout = nEffFrom(sB, s2B);
 }
- 
+
 struct ShapeResult {
   std::string var;
   Stat obs;
@@ -419,7 +419,7 @@ struct ShapeResult {
   double neffRef = 0.0, neffTest = 0.0;
   int nbins = 0, nUnits = 0, nperm = 0;
   std::vector<double> nullAD, nullCvM, nullKS;
- 
+
   // Discrepancy profile: where along the variable the difference sits.
   std::vector<double> edges;      // coarse bin edges, nbins+1
   std::vector<double> dCdf;       // F_test - F_ref at each bin's upper edge
@@ -427,7 +427,7 @@ struct ShapeResult {
   std::vector<double> cumA2;      // running sum of the above, normalised to 1
   std::vector<double> lo68, hi68, lo95, hi95;  // pointwise permutation bands
 };
- 
+
 /// Permutation test.  Labels are shuffled at the unit level, preserving the
 /// number of A-units and B-units, and each pseudo-sample is renormalised
 /// exactly like the observed one -- so the null is a pure shape null and knows
@@ -439,7 +439,7 @@ inline ShapeResult shapeTest(const PooledVar& P, const std::string& varName, int
   R.nbins = P.nbins;
   R.nUnits = P.nUnits;
   R.nperm = nperm;
- 
+
   std::vector<double> hA(P.nbins), hB(P.nbins);
   fillByLabel(P, P.label.data(), hA.data(), hB.data(), R.neffRef, R.neffTest);
   R.edges = P.edges;
@@ -456,7 +456,7 @@ inline ShapeResult shapeTest(const PooledVar& P, const std::string& varName, int
       R.cumA2[k] = (tot > 0.0) ? run / tot : 0.0;
     }
   }
- 
+
   if (nperm <= 0) return R;
   R.nullAD.resize(nperm);
   R.nullCvM.resize(nperm);
@@ -464,7 +464,7 @@ inline ShapeResult shapeTest(const PooledVar& P, const std::string& varName, int
   // Per-bin CDF differences under relabelling: the envelope of these is the
   // band the observed curve must escape to mean anything.
   std::vector<std::vector<double>> nullD(nperm);
- 
+
   parallelFor(static_cast<std::size_t>(nperm), nthreads, [&](std::size_t k) {
     std::mt19937_64 rng(seed + 0x9E3779B97F4A7C15ULL * (k + 1));
     std::vector<uint8_t> lab(P.label);
@@ -479,7 +479,7 @@ inline ShapeResult shapeTest(const PooledVar& P, const std::string& varName, int
     R.nullCvM[k] = s.CvM;
     R.nullKS[k] = s.KS;
   });
- 
+
   // Pointwise quantiles.  Pointwise, not simultaneous: with n bins, about 5%
   // of them stray outside the 95% band under the null, so read coherent runs
   // of bins rather than isolated excursions.
@@ -503,7 +503,7 @@ inline ShapeResult shapeTest(const PooledVar& P, const std::string& varName, int
       R.hi95[k] = q(0.975);
     }
   }
- 
+
   auto finish = [](const std::vector<double>& null, double obs, double& p, double& z) {
     int ge = 0;
     double m = 0.0, m2 = 0.0;
@@ -523,11 +523,11 @@ inline ShapeResult shapeTest(const PooledVar& P, const std::string& varName, int
   finish(R.nullKS, R.obs.KS, R.pKS, R.zKS);
   return R;
 }
- 
+
 // ---------------------------------------------------------------------------
 // Scale-free fractions and ratios, with a block bootstrap
 // ---------------------------------------------------------------------------
- 
+
 /// A phase-space region: var in [lo,hi), optionally restricted to one charge.
 struct Region {
   std::string name;
@@ -535,7 +535,7 @@ struct Region {
   double lo = -1e300, hi = 1e300;
   int charge = 0;  // 0 = both, +1 = mu+, -1 = mu-
 };
- 
+
 /// A reported number: the ratio of two accumulator columns.  Column 0 is
 /// always the sample total, so a plain fraction is {name, k, 0}.
 struct Quantity {
@@ -543,7 +543,7 @@ struct Quantity {
   int num = 0;
   int den = 0;
 };
- 
+
 /// Per-unit weighted sums, one row per bootstrap unit, one column per region
 /// (+ column 0 = total).  Small: nUnits is ~ n_files or ~200 blocks.
 struct UnitSums {
@@ -552,7 +552,7 @@ struct UnitSums {
   double at(int u, int c) const { return m[std::size_t(u) * ncol + c]; }
   double& at(int u, int c) { return m[std::size_t(u) * ncol + c]; }
 };
- 
+
 /// Assign each row to a bootstrap unit: files when there are enough of them,
 /// otherwise random blocks of whole events.
 inline std::vector<int> bootstrapUnits(const Sample& S, int minFiles, int nBlocks,
@@ -572,7 +572,7 @@ inline std::vector<int> bootstrapUnits(const Sample& S, int minFiles, int nBlock
   nUnitsOut = nb;
   return u;
 }
- 
+
 inline UnitSums accumulate(const Sample& S, const std::vector<Region>& regs,
                            const std::vector<int>& unit, int nUnits) {
   UnitSums U;
@@ -592,7 +592,7 @@ inline UnitSums accumulate(const Sample& S, const std::vector<Region>& regs,
   }
   return U;
 }
- 
+
 inline std::vector<double> evalQuantities(const std::vector<double>& col,
                                           const std::vector<Quantity>& qs) {
   std::vector<double> out(qs.size(), std::nan(""));
@@ -602,7 +602,7 @@ inline std::vector<double> evalQuantities(const std::vector<double>& col,
   }
   return out;
 }
- 
+
 struct QuantityResult {
   std::string name;
   double a = 0, ea = 0, b = 0, eb = 0;
@@ -613,7 +613,7 @@ struct QuantityResult {
   // be printed as "-100%".
   bool okA = false, okB = false, comparable = false;
 };
- 
+
 /// Bootstrap over units, independently for A and B, then compare.
 inline std::vector<QuantityResult> compareQuantities(
     const Sample& A, const Sample& B, const std::vector<Region>& regs,
@@ -625,10 +625,10 @@ inline std::vector<QuantityResult> compareQuantities(
   const std::vector<int> uB = bootstrapUnits(B, minFiles, nBlocks, seed + 7, nUB, fB);
   if (usedFilesA) *usedFilesA = fA;
   if (usedFilesB) *usedFilesB = fB;
- 
+
   const UnitSums UA = accumulate(A, regs, uA, nUA);
   const UnitSums UB = accumulate(B, regs, uB, nUB);
- 
+
   auto total = [](const UnitSums& U) {
     std::vector<double> c(U.ncol, 0.0);
     for (int u = 0; u < U.nUnits; ++u)
@@ -637,7 +637,7 @@ inline std::vector<QuantityResult> compareQuantities(
   };
   const std::vector<double> obsA = evalQuantities(total(UA), qs);
   const std::vector<double> obsB = evalQuantities(total(UB), qs);
- 
+
   auto boot = [&](const UnitSums& U, uint64_t sd) {
     std::vector<std::vector<double>> rep(qs.size());
     std::mt19937_64 rng(sd);
@@ -667,7 +667,7 @@ inline std::vector<QuantityResult> compareQuantities(
   };
   const std::vector<double> eA = boot(UA, seed + 11);
   const std::vector<double> eB = boot(UB, seed + 13);
- 
+
   std::vector<QuantityResult> out(qs.size());
   for (std::size_t i = 0; i < qs.size(); ++i) {
     QuantityResult& r = out[i];
@@ -686,11 +686,11 @@ inline std::vector<QuantityResult> compareQuantities(
   }
   return out;
 }
- 
+
 // ---------------------------------------------------------------------------
 // Shape-ratio band for the ratio panels
 // ---------------------------------------------------------------------------
- 
+
 /// Per-bin SHAPE ratio (B/A, each normalised to unit area) with a bootstrap
 /// error band.  Bootstrapping over files or event blocks -- rather than using
 /// sqrt(sum w^2) -- automatically accounts for correlations between muons in
@@ -700,7 +700,7 @@ struct RatioBand {
   std::vector<double> ratio, err;   // per bin
   std::vector<double> shapeA, shapeB, errA, errB;
 };
- 
+
 inline RatioBand shapeRatioBootstrap(const Sample& A, const Sample& B, int j,
                                      const std::vector<double>& edges, int nboot,
                                      uint64_t seed, int minFiles = 5, int nBlocks = 200) {
@@ -709,7 +709,7 @@ inline RatioBand shapeRatioBootstrap(const Sample& A, const Sample& B, int j,
   bool fA = false, fB = false;
   const std::vector<int> uA = bootstrapUnits(A, minFiles, nBlocks, seed, nUA, fA);
   const std::vector<int> uB = bootstrapUnits(B, minFiles, nBlocks, seed + 7, nUB, fB);
- 
+
   auto build = [&](const Sample& S, const std::vector<int>& u, int nU) {
     std::vector<double> m(std::size_t(nU) * nb, 0.0);
     for (std::size_t i = 0; i < S.rows(); ++i)
@@ -718,7 +718,7 @@ inline RatioBand shapeRatioBootstrap(const Sample& A, const Sample& B, int j,
   };
   const std::vector<double> MA = build(A, uA, nUA);
   const std::vector<double> MB = build(B, uB, nUB);
- 
+
   auto shapeOf = [&](const std::vector<double>& M, int nU, const int* pickIdx) {
     std::vector<double> h(nb, 0.0);
     for (int k = 0; k < nU; ++k) {
@@ -730,14 +730,14 @@ inline RatioBand shapeRatioBootstrap(const Sample& A, const Sample& B, int j,
     if (s > 0.0) for (double& x : h) x /= s;
     return h;
   };
- 
+
   RatioBand R;
   R.shapeA = shapeOf(MA, nUA, nullptr);
   R.shapeB = shapeOf(MB, nUB, nullptr);
   R.ratio.assign(nb, std::nan(""));
   for (int b = 0; b < nb; ++b)
     if (R.shapeA[b] > 0.0) R.ratio[b] = R.shapeB[b] / R.shapeA[b];
- 
+
   std::vector<std::vector<double>> rep(nb);
   std::vector<std::vector<double>> repA(nb), repB(nb);
   std::mt19937_64 rng(seed + 17);
@@ -772,11 +772,11 @@ inline RatioBand shapeRatioBootstrap(const Sample& A, const Sample& B, int j,
   }
   return R;
 }
- 
+
 // ---------------------------------------------------------------------------
 // Per-bin effective statistics -- the ceiling on everything above
 // ---------------------------------------------------------------------------
- 
+
 inline std::vector<double> nEffPerBin(const Sample& S, int j,
                                       const std::vector<double>& edges) {
   const int nb = static_cast<int>(edges.size()) - 1;
@@ -789,8 +789,8 @@ inline std::vector<double> nEffPerBin(const Sample& S, int j,
   for (int b = 0; b < nb; ++b) out[b] = nEffFrom(s[b], s2[b]);
   return out;
 }
- 
- 
+
+
 // ===========================================================================
 // STREAMING ACCUMULATOR
 // ===========================================================================
@@ -810,12 +810,12 @@ inline std::vector<double> nEffPerBin(const Sample& S, int j,
 //   * values outside the recorded range pile into the end bins.  The clamp
 //     count is printed; if it is not ~0, widen the range.
 // The selftest checks the streamed path against the exact per-muon path.
- 
+
 struct HistSpec {
   int nvar = 0;
   int nfine = 512;
   std::vector<double> lo, hi;  // per variable, in transformed units
- 
+
   double width(int v) const { return (hi[v] - lo[v]) / nfine; }
   int bin(int v, double x, bool& clamped) const {
     const double f = (x - lo[v]) / (hi[v] - lo[v]);
@@ -831,10 +831,10 @@ struct HistSpec {
     return static_cast<int>(std::lround((x - lo[v]) / width(v)));
   }
 };
- 
+
 /// Charge index: 0 = mu+, 1 = mu-.  Pass chg = -1 to any accessor for "both".
 inline int chgIndex(int q) { return q > 0 ? 0 : 1; }
- 
+
 struct UnitHists {
   std::string label;
   HistSpec spec;
@@ -844,7 +844,7 @@ struct UnitHists {
   std::vector<double> hw2;   // [chg][var][bin]  -- sum w^2, for N_eff per bin
   std::vector<double> uSw, uSw2, uSwP, uSwM;  // per unit
   long long rows = 0, clamped = 0;
- 
+
   std::size_t idx(int u, int c, int v, int b) const {
     return ((static_cast<std::size_t>(u) * 2 + c) * spec.nvar + v) * spec.nfine + b;
   }
@@ -921,7 +921,7 @@ struct UnitHists {
     return m;
   }
 };
- 
+
 /// Merge every `factor` adjacent fine bins.  This is EXACT: summing adjacent
 /// bins gives precisely what accumulating on the coarser grid would have
 /// given, because the coarse edges are a subset of the fine ones.  So a whole
@@ -951,7 +951,7 @@ inline UnitHists coarsenFine(const UnitHists& U, int factor) {
         O.hw2[O.idx2(c, v, b / factor)] += U.hw2[U.idx2(c, v, b)];
   return O;
 }
- 
+
 /// Split the units into two halves.  This is the closure test in the streamed
 /// world: no re-reading, and the halves are exactly disjoint sets of units.
 inline std::pair<UnitHists, UnitHists> splitUnits(const UnitHists& U, uint64_t seed) {
@@ -960,7 +960,7 @@ inline std::pair<UnitHists, UnitHists> splitUnits(const UnitHists& U, uint64_t s
   std::mt19937_64 rng(seed);
   std::shuffle(order.begin(), order.end(), rng);
   const int half = U.nUnits / 2;
- 
+
   UnitHists A, B;
   A.label = U.label + " (half 1)";
   B.label = U.label + " (half 2)";
@@ -1002,7 +1002,7 @@ inline std::pair<UnitHists, UnitHists> splitUnits(const UnitHists& U, uint64_t s
   B.rows = U.rows - A.rows;
   return {A, B};
 }
- 
+
 /// Coarse bin boundaries, as indices into the fine grid, placed so that each
 /// coarse bin holds an equal share of the pooled weight.
 inline std::vector<int> equalWeightFineEdges(const UnitHists& R, const UnitHists& T,
@@ -1014,7 +1014,7 @@ inline std::vector<int> equalWeightFineEdges(const UnitHists& R, const UnitHists
   std::vector<double> pooled(nf, 0.0);
   for (int b = 0; b < nf; ++b)
     pooled[b] = (sr > 0 ? fr[b] / sr : 0.0) + (st > 0 ? ft[b] / st : 0.0);
- 
+
   double tot = 0.0;
   for (double x : pooled) tot += x;
   std::vector<int> edges{0};
@@ -1032,7 +1032,7 @@ inline std::vector<int> equalWeightFineEdges(const UnitHists& R, const UnitHists
   edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
   return edges;
 }
- 
+
 /// Physical coordinates of coarse edges.
 inline std::vector<double> edgeValues(const HistSpec& sp, int var,
                                       const std::vector<int>& fineEdges) {
@@ -1041,7 +1041,7 @@ inline std::vector<double> edgeValues(const HistSpec& sp, int var,
   for (int b : fineEdges) e.push_back(sp.edge(var, b));
   return e;
 }
- 
+
 /// CSR over units, coarse-binned -- the input the permutation test wants.
 inline PooledVar buildPooledFromHists(const UnitHists& R, const UnitHists& T, int var,
                                       int chg, const std::vector<int>& fineEdges) {
@@ -1054,14 +1054,14 @@ inline PooledVar buildPooledFromHists(const UnitHists& R, const UnitHists& T, in
   P.off.assign(P.nUnits + 1, 0);
   P.uSw.assign(P.nUnits, 0.0);
   P.uSw2.assign(P.nUnits, 0.0);
- 
+
   // Each sample is normalised to unit total weight before pooling, which is
   // what makes every statistic blind to the production rate.
   const double sR = R.totalW(), sT = T.totalW();
   std::vector<int> f2c(R.spec.nfine, 0);
   for (int cb = 0; cb < P.nbins; ++cb)
     for (int b = fineEdges[cb]; b < fineEdges[cb + 1]; ++b) f2c[b] = cb;
- 
+
   std::vector<double> tmp(P.nbins);
   for (int side = 0; side < 2; ++side) {
     const UnitHists& S = side ? T : R;
@@ -1095,7 +1095,7 @@ inline PooledVar buildPooledFromHists(const UnitHists& R, const UnitHists& T, in
     if (P.off[u] == 0 && u > 0 && P.off[u - 1] > 0) P.off[u] = P.off[u + 1];
   return P;
 }
- 
+
 /// Weighted sums per unit for the region/fraction machinery.
 inline UnitSums unitSumsFromHists(const UnitHists& S, const std::vector<Region>& regs) {
   UnitSums U;
@@ -1119,12 +1119,12 @@ inline UnitSums unitSumsFromHists(const UnitHists& S, const std::vector<Region>&
   }
   return U;
 }
- 
+
 /// The cut actually applied, after snapping to the fine grid.
 inline std::pair<double, double> effectiveCut(const HistSpec& sp, const Region& R) {
   return {sp.edge(R.var, sp.snap(R.var, R.lo)), sp.edge(R.var, sp.snap(R.var, R.hi))};
 }
- 
+
 /// Bootstrap comparison driven by two pre-built UnitSums.
 inline std::vector<QuantityResult> compareQuantitySums(const UnitSums& UA,
                                                        const UnitSums& UB,
@@ -1138,7 +1138,7 @@ inline std::vector<QuantityResult> compareQuantitySums(const UnitSums& UA,
   };
   const std::vector<double> obsA = evalQuantities(total(UA), qs);
   const std::vector<double> obsB = evalQuantities(total(UB), qs);
- 
+
   auto boot = [&](const UnitSums& U, uint64_t sd) {
     std::vector<std::vector<double>> rep(qs.size());
     std::mt19937_64 rng(sd);
@@ -1166,7 +1166,7 @@ inline std::vector<QuantityResult> compareQuantitySums(const UnitSums& UA,
     return sd_out;
   };
   const std::vector<double> eA = boot(UA, seed + 11), eB = boot(UB, seed + 13);
- 
+
   std::vector<QuantityResult> out(qs.size());
   for (std::size_t i = 0; i < qs.size(); ++i) {
     QuantityResult& r = out[i];
@@ -1187,7 +1187,7 @@ inline std::vector<QuantityResult> compareQuantitySums(const UnitSums& UA,
   }
   return out;
 }
- 
+
 /// Shape ratio (test/reference, each normalised to unit area) with a bootstrap
 /// band, from per-unit coarse histograms.
 inline RatioBand shapeRatioFromHists(const UnitHists& R, const UnitHists& T, int var,
@@ -1209,7 +1209,7 @@ inline RatioBand shapeRatioFromHists(const UnitHists& R, const UnitHists& T, int
     return m;
   };
   const std::vector<double> MR = coarse(R), MT = coarse(T);
- 
+
   auto shapeOf = [&](const std::vector<double>& M, int nU, const int* pick) {
     std::vector<double> hh(nb, 0.0);
     for (int k = 0; k < nU; ++k) {
@@ -1221,14 +1221,14 @@ inline RatioBand shapeRatioFromHists(const UnitHists& R, const UnitHists& T, int
     if (s > 0.0) for (double& x : hh) x /= s;
     return hh;
   };
- 
+
   RatioBand B;
   B.shapeA = shapeOf(MR, R.nUnits, nullptr);
   B.shapeB = shapeOf(MT, T.nUnits, nullptr);
   B.ratio.assign(nb, std::nan(""));
   for (int b = 0; b < nb; ++b)
     if (B.shapeA[b] > 0.0) B.ratio[b] = B.shapeB[b] / B.shapeA[b];
- 
+
   std::vector<std::vector<double>> rep(nb), repA(nb), repB(nb);
   std::mt19937_64 rng(seed + 17);
   std::vector<int> ia(R.nUnits), ib(T.nUnits);
@@ -1262,7 +1262,7 @@ inline RatioBand shapeRatioFromHists(const UnitHists& R, const UnitHists& T, int
   }
   return B;
 }
- 
+
 inline std::vector<double> nEffPerBinFromHists(const UnitHists& S, int var, int chg,
                                                const std::vector<int>& fineEdges) {
   const int nb = static_cast<int>(fineEdges.size()) - 1;
@@ -1280,5 +1280,5 @@ inline std::vector<double> nEffPerBinFromHists(const UnitHists& S, int var, int 
   }
   return out;
 }
- 
-}  // namespace mfc
+
+}  // namespace fluxval

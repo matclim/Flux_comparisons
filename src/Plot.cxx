@@ -1,5 +1,5 @@
-#include "muonflux/Plot.h"
- 
+#include "fluxval/Plot.h"
+
 #include <TCanvas.h>
 #include <TColor.h>
 #include <TGaxis.h>
@@ -14,18 +14,18 @@
 #include <TROOT.h>
 #include <TStyle.h>
 #include <TText.h>
- 
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
- 
-namespace mfl {
- 
+
+namespace fluxval {
+
 namespace {
 // Not const: setStyle() replaces these with colours drawn from the palette.
 int kColA = kAzure + 2;
 int kColB = kOrange + 8;
- 
+
 // Legends are rendered through TLatex, which turns "_" in a filename into a
 // subscript.  TText does no markup interpretation, so labels survive intact.
 void putLabel(double x, double y, const std::string& s, int col, double size = 0.030) {
@@ -37,7 +37,7 @@ void putLabel(double x, double y, const std::string& s, int col, double size = 0
   t->Draw();
 }
 }  // namespace
- 
+
 void setStyle() {
   gStyle->SetOptStat(0);
   gStyle->SetOptTitle(0);
@@ -46,7 +46,7 @@ void setStyle() {
   gStyle->SetFrameLineWidth(1);
   gStyle->SetEndErrorSize(0);
   gStyle->SetPalette(kCool);
- 
+
   // Draw the two sample colours from the ends of the active palette rather
   // than hard-coding them, so the overlays match anything else on the page.
   // 12% and 88% instead of 0% and 100%: the extreme ends of kCool are very
@@ -57,10 +57,10 @@ void setStyle() {
     kColB = TColor::GetColorPalette(static_cast<int>(0.88 * n));
   }
 }
- 
+
 int colourA() { return kColA; }
 int colourB() { return kColB; }
- 
+
 TH1D* densityHist(const char* name, const std::vector<double>& edges,
                   const std::vector<double>& shape, const std::vector<double>& err) {
   const int nb = static_cast<int>(edges.size()) - 1;
@@ -76,7 +76,7 @@ TH1D* densityHist(const char* name, const std::vector<double>& edges,
   }
   return h;
 }
- 
+
 TH1D* ratioHist(const char* name, const std::vector<double>& edges,
                 const std::vector<double>& ratio, const std::vector<double>& err) {
   const int nb = static_cast<int>(edges.size()) - 1;
@@ -92,7 +92,7 @@ TH1D* ratioHist(const char* name, const std::vector<double>& edges,
   h->SetLineColor(kBlack);
   return h;
 }
- 
+
 void drawWithRatio(TCanvas* c, TH1D* hA, TH1D* hB, TH1D* hR, const std::string& xtitle,
                    bool logy, const std::string& labA, const std::string& labB,
                    const std::string& annotation, double ratioSpan) {
@@ -108,7 +108,7 @@ void drawWithRatio(TCanvas* c, TH1D* hA, TH1D* hB, TH1D* hR, const std::string& 
   p2->SetLeftMargin(0.13);
   p1->Draw();
   p2->Draw();
- 
+
   p1->cd();
   if (logy) p1->SetLogy();
   hA->SetLineColor(kColA);
@@ -121,7 +121,7 @@ void drawWithRatio(TCanvas* c, TH1D* hA, TH1D* hB, TH1D* hR, const std::string& 
   hA->GetYaxis()->SetTitle("normalised density");
   hA->GetYaxis()->SetTitleSize(0.050);
   hA->GetYaxis()->SetTitleOffset(1.25);
- 
+
   double top = std::max(hA->GetMaximum(), hB->GetMaximum());
   double bot = 1e300;
   for (int b = 1; b <= hA->GetNbinsX(); ++b) {
@@ -141,7 +141,7 @@ void drawWithRatio(TCanvas* c, TH1D* hA, TH1D* hB, TH1D* hR, const std::string& 
     tx.SetTextSize(0.037);
     tx.DrawLatex(0.13, 0.955, annotation.c_str());
   }
- 
+
   p2->cd();
   hR->GetXaxis()->SetTitle(xtitle.c_str());
   hR->GetYaxis()->SetTitle("test / ref  (shape)");
@@ -152,7 +152,7 @@ void drawWithRatio(TCanvas* c, TH1D* hA, TH1D* hB, TH1D* hR, const std::string& 
   hR->GetXaxis()->SetTitleSize(0.115);
   hR->GetXaxis()->SetTitleOffset(1.15);
   hR->GetXaxis()->SetLabelSize(0.095);
- 
+
   double span = ratioSpan;
   if (span <= 0.0) {  // auto: cover the points and their errors, then round up
     double m = 0.0;
@@ -171,14 +171,14 @@ void drawWithRatio(TCanvas* c, TH1D* hA, TH1D* hB, TH1D* hR, const std::string& 
   l->Draw();
   c->Update();
 }
- 
-void drawNull(TCanvas* c, const mfc::ShapeResult& R) {
+
+void drawNull(TCanvas* c, const fluxval::ShapeResult& R) {
   c->Clear();
   c->cd();
   c->SetLeftMargin(0.13);
   c->SetTopMargin(0.09);
   if (R.nullAD.empty()) return;
- 
+
   double hi = R.obs.AD;
   for (double x : R.nullAD) hi = std::max(hi, x);
   TH1D* h = new TH1D(("null_" + R.var).c_str(), "", 60, 0.0, hi * 1.15);
@@ -190,12 +190,12 @@ void drawNull(TCanvas* c, const mfc::ShapeResult& R) {
   h->SetFillColorAlpha(kGray, 0.45);
   h->SetLineWidth(2);
   h->Draw("HIST");
- 
+
   TLine* l = new TLine(R.obs.AD, 0.0, R.obs.AD, h->GetMaximum() * 0.92);
   l->SetLineColor(kRed + 1);
   l->SetLineWidth(3);
   l->Draw();
- 
+
   TLatex tx;
   tx.SetNDC();
   tx.SetTextSize(0.036);
@@ -212,7 +212,7 @@ void drawNull(TCanvas* c, const mfc::ShapeResult& R) {
   tx.SetTextAlign(12);
   c->Update();
 }
- 
+
 void drawNeff(TCanvas* c, const std::vector<double>& edges,
               const std::vector<double>& nA, const std::vector<double>& nB,
               const std::string& xtitle, const std::string& labA,
@@ -241,7 +241,7 @@ void drawNeff(TCanvas* c, const std::vector<double>& edges,
   ha->SetMaximum(std::max(ha->GetMaximum(), hb->GetMaximum()) * 30.0);
   ha->Draw("HIST");
   hb->Draw("HIST SAME");
- 
+
   TLine* l = new TLine(edges.front(), 25.0, edges.back(), 25.0);
   l->SetLineStyle(2);
   l->SetLineColor(kRed + 1);
@@ -258,8 +258,8 @@ void drawNeff(TCanvas* c, const std::vector<double>& edges,
   tx.DrawLatex(0.13, 0.955, "effective statistics per bin -- the ceiling on any test");
   c->Update();
 }
- 
-void drawQuantityPulls(TCanvas* c, const std::vector<mfc::QuantityResult>& q,
+
+void drawQuantityPulls(TCanvas* c, const std::vector<fluxval::QuantityResult>& q,
                        const std::string& labA, const std::string& labB) {
   c->Clear();
   c->cd();
@@ -269,7 +269,7 @@ void drawQuantityPulls(TCanvas* c, const std::vector<mfc::QuantityResult>& q,
   c->SetBottomMargin(0.11);
   const int n = static_cast<int>(q.size());
   if (n == 0) return;
- 
+
   // Range from the rows that carry information only.  A single unmeasurable
   // row spanning +-60% would otherwise squash every real result onto the zero
   // line, which is exactly what happened before.
@@ -279,7 +279,7 @@ void drawQuantityPulls(TCanvas* c, const std::vector<mfc::QuantityResult>& q,
     const double e = (r.a != 0.0) ? r.ediff / std::fabs(r.a) : 0.0;
     xmax = std::max(xmax, 100.0 * (std::fabs(r.relDiff) + e) * 1.30);
   }
- 
+
   TH2F* frame = new TH2F("pullframe", "", 100, -xmax, xmax, n, 0, n);
   frame->SetDirectory(nullptr);
   for (int i = 0; i < n; ++i) frame->GetYaxis()->SetBinLabel(i + 1, q[i].name.c_str());
@@ -287,7 +287,7 @@ void drawQuantityPulls(TCanvas* c, const std::vector<mfc::QuantityResult>& q,
   frame->GetXaxis()->SetTitle("(test - ref) / ref   [%]");
   frame->GetXaxis()->SetTitleSize(0.042);
   frame->Draw();
- 
+
   TGraphErrors* g = new TGraphErrors();
   int np = 0;
   for (int i = 0; i < n; ++i) {
@@ -304,12 +304,12 @@ void drawQuantityPulls(TCanvas* c, const std::vector<mfc::QuantityResult>& q,
   g->SetLineColor(kColB);
   g->SetMarkerColor(kColB);
   g->Draw("P SAME");
- 
+
   TLine* z = new TLine(0.0, 0.0, 0.0, n);
   z->SetLineStyle(2);
   z->SetLineColor(kGray + 2);
   z->Draw();
- 
+
   TLatex tx;  // user coordinates, so the labels track the rows exactly
   tx.SetTextSize(0.029);
   tx.SetTextAlign(12);
@@ -336,8 +336,8 @@ void drawQuantityPulls(TCanvas* c, const std::vector<mfc::QuantityResult>& q,
   hd.DrawLatex(0.02, 0.020, ("test: " + labB).c_str());
   c->Update();
 }
- 
-void drawPValueOverview(TCanvas* c, const std::vector<mfc::ShapeResult>& res,
+
+void drawPValueOverview(TCanvas* c, const std::vector<fluxval::ShapeResult>& res,
                         const std::string& caseTag, const std::string& labRef,
                         const std::string& labTest) {
   c->Clear();
@@ -348,7 +348,7 @@ void drawPValueOverview(TCanvas* c, const std::vector<mfc::ShapeResult>& res,
   c->SetBottomMargin(0.12);
   const int n = static_cast<int>(res.size());
   if (n == 0) return;
- 
+
   TH2F* frame = new TH2F("pframe", "", 100, 0.0, 1.0, n, 0, n);
   frame->SetDirectory(nullptr);
   for (int i = 0; i < n; ++i)
@@ -358,20 +358,20 @@ void drawPValueOverview(TCanvas* c, const std::vector<mfc::ShapeResult>& res,
   frame->GetXaxis()->SetTitleSize(0.040);
   frame->GetXaxis()->SetTitleOffset(1.25);
   frame->Draw();
- 
+
   TGraph* g = new TGraph(n);
   for (int i = 0; i < n; ++i) g->SetPoint(i, std::max(res[i].pAD, 0.004), i + 0.5);
   g->SetMarkerStyle(20);
   g->SetMarkerSize(1.3);
   g->SetMarkerColor(kColB);
   g->Draw("P SAME");
- 
+
   TLine* l = new TLine(0.05, 0.0, 0.05, n);
   l->SetLineStyle(2);
   l->SetLineColor(kRed + 1);
   l->SetLineWidth(2);
   l->Draw();
- 
+
   // A p-value at the permutation floor is drawn at the left edge; mark it so
   // it is not mistaken for a resolved small number.
   TLatex fl;
@@ -381,7 +381,7 @@ void drawPValueOverview(TCanvas* c, const std::vector<mfc::ShapeResult>& res,
   for (int i = 0; i < n; ++i)
     if (res[i].pAD <= 1.0 / (res[i].nperm + 1.0) + 1e-12)
       fl.DrawLatex(0.055, i + 0.5, "at floor");
- 
+
   TLatex hd;
   hd.SetNDC();
   hd.SetTextAlign(12);
@@ -397,8 +397,8 @@ void drawPValueOverview(TCanvas* c, const std::vector<mfc::ShapeResult>& res,
   hd.DrawLatex(0.24, 0.912, "dashed: p = 0.05");
   c->Update();
 }
- 
-void drawProfile(TCanvas* c, const mfc::ShapeResult& R, const std::string& xtitle,
+
+void drawProfile(TCanvas* c, const fluxval::ShapeResult& R, const std::string& xtitle,
                  const std::string& caseTag, const std::string& labRef,
                  const std::string& labTest) {
   c->Clear();
@@ -409,7 +409,7 @@ void drawProfile(TCanvas* c, const mfc::ShapeResult& R, const std::string& xtitl
   c->SetBottomMargin(0.13);
   const int nb = R.nbins;
   if (nb < 2 || static_cast<int>(R.edges.size()) != nb + 1) return;
- 
+
   double ymax = 0.0;
   for (int k = 0; k < nb; ++k)
     ymax = std::max(ymax, std::max(std::fabs(R.dCdf[k]),
@@ -428,7 +428,7 @@ void drawProfile(TCanvas* c, const mfc::ShapeResult& R, const std::string& xtitl
     return;
   }
   ymax *= 1.35;
- 
+
   TH2F* frame = new TH2F("profframe", "", 100, R.edges.front(), R.edges.back(), 100,
                          -ymax, ymax);
   frame->SetDirectory(nullptr);
@@ -443,7 +443,7 @@ void drawProfile(TCanvas* c, const mfc::ShapeResult& R, const std::string& xtitl
   frame->GetYaxis()->SetLabelColor(kColB);
   frame->GetYaxis()->SetAxisColor(kColB);
   frame->Draw();
- 
+
   // Permutation bands, widest first so the 68% sits on top of the 95%.
   auto bandGraph = [&](const std::vector<double>& lo, const std::vector<double>& hi,
                        int col, double alpha) {
@@ -459,12 +459,12 @@ void drawProfile(TCanvas* c, const mfc::ShapeResult& R, const std::string& xtitl
   };
   bandGraph(R.lo95, R.hi95, kGray + 1, 0.35);
   bandGraph(R.lo68, R.hi68, kGray + 2, 0.45);
- 
+
   TLine* z = new TLine(R.edges.front(), 0.0, R.edges.back(), 0.0);
   z->SetLineStyle(2);
   z->SetLineColor(kGray + 3);
   z->Draw();
- 
+
   // Observed signed CDF difference.
   TGraph* obs = new TGraph(nb);
   for (int k = 0; k < nb; ++k)
@@ -472,7 +472,7 @@ void drawProfile(TCanvas* c, const mfc::ShapeResult& R, const std::string& xtitl
   obs->SetLineColor(kColB);
   obs->SetLineWidth(3);
   obs->Draw("L SAME");
- 
+
   // Cumulative A^2, mapped onto the same pad and read off the right axis.
   TGraph* cum = new TGraph(nb);
   for (int k = 0; k < nb; ++k)
@@ -482,7 +482,7 @@ void drawProfile(TCanvas* c, const mfc::ShapeResult& R, const std::string& xtitl
   cum->SetLineWidth(3);
   cum->SetLineStyle(7);
   cum->Draw("L SAME");
- 
+
   TGaxis* ax = new TGaxis(R.edges.back(), -ymax, R.edges.back(), ymax, 0.0, 1.0, 510,
                           "+L");
   ax->SetTitle("cumulative share of A^{2}");
@@ -493,7 +493,7 @@ void drawProfile(TCanvas* c, const mfc::ShapeResult& R, const std::string& xtitl
   ax->SetLabelColor(kColA);
   ax->SetTitleColor(kColA);
   ax->Draw();
- 
+
   TLatex hd;
   hd.SetNDC();
   hd.SetTextAlign(12);
@@ -514,7 +514,7 @@ void drawProfile(TCanvas* c, const mfc::ShapeResult& R, const std::string& xtitl
   hd.DrawLatex(0.55, 0.168, "pointwise -- read runs of bins, not single ones");
   c->Update();
 }
- 
+
 void drawPP(TCanvas* c, const std::vector<std::string>& varNames,
             const std::vector<std::vector<double>>& pvals) {
   c->Clear();
@@ -523,7 +523,7 @@ void drawPP(TCanvas* c, const std::vector<std::string>& varNames,
   c->SetTopMargin(0.09);
   c->SetRightMargin(0.06);
   c->SetBottomMargin(0.13);
- 
+
   TH2F* frame = new TH2F("ppframe", "", 100, 0.0, 1.0, 100, 0.0, 1.0);
   frame->SetDirectory(nullptr);
   frame->GetXaxis()->SetTitle("expected  k / (n+1)");
@@ -531,13 +531,13 @@ void drawPP(TCanvas* c, const std::vector<std::string>& varNames,
   frame->GetXaxis()->SetTitleSize(0.042);
   frame->GetYaxis()->SetTitleSize(0.042);
   frame->Draw();
- 
+
   TLine* d = new TLine(0, 0, 1, 1);
   d->SetLineStyle(2);
   d->SetLineColor(kGray + 2);
   d->SetLineWidth(2);
   d->Draw();
- 
+
   const int nv = static_cast<int>(varNames.size());
   const int ncol = TColor::GetNumberOfColors();
   for (int v = 0; v < nv; ++v) {
@@ -561,7 +561,7 @@ void drawPP(TCanvas* c, const std::vector<std::string>& varNames,
     lg.SetTextColor(col);
     lg.DrawLatex(0.62, 0.36 - 0.033 * v, varNames[v].c_str());
   }
- 
+
   TLatex tx;
   tx.SetNDC();
   tx.SetTextSize(0.033);
@@ -572,7 +572,7 @@ void drawPP(TCanvas* c, const std::vector<std::string>& varNames,
   tx.DrawLatex(0.16, 0.865, "below the diagonal = anti-conservative (invents significance)");
   c->Update();
 }
- 
+
 void drawTextPage(TCanvas* c, const std::string& title,
                   const std::vector<std::string>& lines) {
   c->Clear();
@@ -592,5 +592,5 @@ void drawTextPage(TCanvas* c, const std::string& title,
   }
   c->Update();
 }
- 
-}  // namespace mfl
+
+}  // namespace fluxval

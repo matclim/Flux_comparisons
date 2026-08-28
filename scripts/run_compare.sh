@@ -7,26 +7,26 @@
 #
 # Glob patterns are expanded into an @list file, which keeps the command line
 # short when a sample has dozens of files.
- 
+
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-build="${MUONFLUX_BUILD:-$here/build}"
- 
+build="${FLUXVAL_BUILD:-$here/build}"
+
 if [[ $# -lt 1 ]]; then
   echo "usage: $0 A [B] [options...]" >&2
   exit 2
 fi
- 
-if [[ ! -x "$build/muonflux_compare" ]]; then
+
+if [[ ! -x "$build/flux_compare" ]]; then
   echo "[build] configuring in $build"
   cmake -S "$here" -B "$build" -DCMAKE_BUILD_TYPE=RelWithDebInfo
   cmake --build "$build" -j "$(nproc 2>/dev/null || echo 4)"
   ctest --test-dir "$build" --output-on-failure
 fi
- 
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
- 
+
 # Turn a glob or a directory into an @list file; leave anything else alone.
 expand() {
   local spec="$1" tag="$2"
@@ -43,9 +43,9 @@ expand() {
   [[ -s "$list" ]] || { echo "no files matched: $spec" >&2; exit 1; }
   echo "@$list"
 }
- 
+
 A="$(expand "$1" A)"; shift
 B=""
 if [[ $# -ge 1 && "$1" != -* ]]; then B="$(expand "$1" B)"; shift; fi
- 
-exec "$build/muonflux_compare" "$A" ${B:+"$B"} "$@"
+
+exec "$build/flux_compare" "$A" ${B:+"$B"} "$@"

@@ -2,7 +2,7 @@
 // run that has already happened.  No rerun, no ROOT file needed: everything is
 // read back out of the tool's own text log.
 //
-//     root -l -b -q 'summary_plot.C("out9_full/muonflux.txt","out9_full/summary")'
+//     root -l -b -q 'summary_plot.C("out9_full/flux.txt","out9_full/summary")'
 //
 // WHY THIS PLOT EXISTS
 // --------------------
@@ -20,14 +20,14 @@
 //   page 2  A^2 per variable and per charge, log scale.  With every p at the
 //           floor, only the relative magnitudes rank the observables, and A^2
 //           scales with statistics so the ranking is meaningful.
- 
+
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
- 
+
 #include "TCanvas.h"
 #include "TGraphErrors.h"
 #include "TH2F.h"
@@ -37,9 +37,9 @@
 #include "TROOT.h"
 #include "TStyle.h"
 #include "TText.h"
- 
-namespace mfsum {
- 
+
+namespace fvsum {
+
 struct Frac {
   std::string name;
   double ref = 0, eref = 0, test = 0, etest = 0, rel = 0, pull = 0;
@@ -47,12 +47,12 @@ struct Frac {
     return (ref != 0.0) ? 100.0 * std::hypot(eref, etest) / std::fabs(ref) : 0.0;
   }
 };
- 
+
 struct Shape {
   std::string var, charge;
   double a2 = 0, z = 0;
 };
- 
+
 inline bool isNumber(const std::string& s) {
   if (s.empty()) return false;
   std::string t = s;
@@ -62,14 +62,14 @@ inline bool isNumber(const std::string& s) {
   std::strtod(t.c_str(), &end);
   return end && *end == '\0' && end != t.c_str();
 }
- 
+
 inline double toNum(const std::string& s) {
   std::string t = s;
   if (!t.empty() && t[0] == '<') t = t.substr(1);
   if (!t.empty() && t.back() == '%') t.pop_back();
   return std::atof(t.c_str());
 }
- 
+
 inline bool splitPM(const std::string& s, double& v, double& e) {
   const size_t p = s.find("+-");
   if (p == std::string::npos) return false;
@@ -79,7 +79,7 @@ inline bool splitPM(const std::string& s, double& v, double& e) {
   e = std::atof(b.c_str());
   return true;
 }
- 
+
 inline std::vector<std::string> tokens(const std::string& line) {
   std::vector<std::string> t;
   std::istringstream is(line);
@@ -87,13 +87,13 @@ inline std::vector<std::string> tokens(const std::string& line) {
   while (is >> w) t.push_back(w);
   return t;
 }
- 
+
 struct Parsed {
   std::vector<Frac> fracs;
   std::vector<Shape> shapes;
   std::string labRef = "reference", labTest = "test";
 };
- 
+
 // The log is console output, so it carries whatever mess the run left: stderr
 // progress lines merged in by `tee`, rows whose label a carriage return ate,
 // and "--" rows for empty regions.  Anything that does not parse cleanly is
@@ -118,11 +118,11 @@ inline Parsed parseLog(const std::string& path) {
       out.labRef = line.substr(12);
     if (line.compare(0, 12, "test      : ") == 0)
       out.labTest = line.substr(12);
- 
+
     std::vector<std::string> t = tokens(line);
     if (t.size() < 4) continue;
     if (t.back() == "<<<") t.pop_back();
- 
+
     int pm = -1;
     for (size_t i = 0; i + 1 < t.size(); ++i)
       if (t[i].find("+-") != std::string::npos &&
@@ -141,7 +141,7 @@ inline Parsed parseLog(const std::string& path) {
       }
       continue;
     }
- 
+
     if (t.size() >= 7 && !isNumber(t[0]) && isNumber(t[1]) && isNumber(t[2]) &&
         isNumber(t[3]) && isNumber(t[4])) {
       if (t[0] == "variable" || t[0][0] == '-') continue;
@@ -155,12 +155,12 @@ inline Parsed parseLog(const std::string& path) {
   }
   return out;
 }
- 
-}  // namespace mfsum
- 
+
+}  // namespace fvsum
+
 // ---------------------------------------------------------------------------
- 
-void summary_plot(const char* logPath = "outputs/muonflux.txt",
+
+void summary_plot(const char* logPath = "outputs/flux.txt",
                   const char* outPrefix = "outputs/summary",
                   const char* labRef = "", const char* labTest = "",
                   double sigLine = 3.0) {
@@ -169,8 +169,8 @@ void summary_plot(const char* logPath = "outputs/muonflux.txt",
   gStyle->SetPadTickX(1);
   gStyle->SetPadTickY(1);
   gStyle->SetPalette(kCool);
- 
-  mfsum::Parsed P = mfsum::parseLog(logPath);
+
+  fvsum::Parsed P = fvsum::parseLog(logPath);
   // The sample names are drawn onto the PDF summary page but never written to
   // the log, so they cannot be recovered from it; take them as arguments.
   if (labRef && *labRef) P.labRef = labRef;
@@ -181,9 +181,9 @@ void summary_plot(const char* logPath = "outputs/muonflux.txt",
   }
   ::Info("summary_plot", "parsed %zu fractions, %zu shape rows", P.fracs.size(),
          P.shapes.size());
- 
+
   const int colBig = kOrange + 8, colSmall = kAzure + 2;
- 
+
   // ============ page 1: effect size beside significance ============
   //
   // One row per quantity, so nothing overlaps.  Left panel: the importance of
@@ -197,14 +197,14 @@ void summary_plot(const char* logPath = "outputs/muonflux.txt",
   // Colour encodes significance only.  There is deliberately no per-sample
   // colour: every point is a comparison of both samples, not a property of one.
   {
-    std::vector<mfsum::Frac> f = P.fracs;
+    std::vector<fvsum::Frac> f = P.fracs;
     // Most significant at the top.
     for (size_t i = 0; i + 1 < f.size(); ++i)
       for (size_t j = i + 1; j < f.size(); ++j)
         if (std::fabs(f[j].pull) > std::fabs(f[i].pull)) std::swap(f[i], f[j]);
     const int n = (int)f.size();
     if (n == 0) return;
- 
+
     TCanvas* c = new TCanvas("cv", "summary", 1100, 40 + 34 * n);
     TPad* pL = new TPad("pL", "", 0.00, 0.00, 0.66, 1.00);
     TPad* pR = new TPad("pR", "", 0.66, 0.00, 1.00, 1.00);
@@ -219,14 +219,14 @@ void summary_plot(const char* logPath = "outputs/muonflux.txt",
     pR->SetLogx();
     pL->Draw();
     pR->Draw();
- 
+
     double xmax = 1.0, ymax = sigLine;
     for (int i = 0; i < n; ++i) {
       xmax = std::max(xmax, std::fabs(f[i].rel) + f[i].relErr());
       ymax = std::max(ymax, std::fabs(f[i].pull));
     }
     xmax *= 1.15;
- 
+
     // ---- left: effect size ----
     pL->cd();
     TH2F* frL = new TH2F("frL", "", 100, -xmax, xmax, n, 0, n);
@@ -238,7 +238,7 @@ void summary_plot(const char* logPath = "outputs/muonflux.txt",
     frL->GetXaxis()->SetTitleSize(0.036);
     frL->GetXaxis()->SetLabelSize(0.030);
     frL->Draw();
- 
+
     TGraphErrors* gL = new TGraphErrors();
     for (int i = 0; i < n; ++i) {
       gL->SetPoint(i, f[i].rel, n - i - 0.5);
@@ -254,7 +254,7 @@ void summary_plot(const char* logPath = "outputs/muonflux.txt",
     zl->SetLineStyle(2);
     zl->SetLineColor(kGray + 2);
     zl->Draw();
- 
+
     TLatex hL;
     hL.SetNDC();
     hL.SetTextAlign(12);
@@ -264,7 +264,7 @@ void summary_plot(const char* logPath = "outputs/muonflux.txt",
     hL.SetTextColor(kGray + 3);
     hL.DrawLatex(0.34, 0.925, Form("ref: %s      test: %s", P.labRef.c_str(),
                                    P.labTest.c_str()));
- 
+
     // ---- right: significance ----
     pR->cd();
     TH2F* frR = new TH2F("frR", "", 100, 0.03, ymax * 2.5, n, 0, n);
@@ -274,7 +274,7 @@ void summary_plot(const char* logPath = "outputs/muonflux.txt",
     frR->GetXaxis()->SetTitleSize(0.036);
     frR->GetXaxis()->SetLabelSize(0.030);
     frR->Draw();
- 
+
     TGraphErrors* gA = new TGraphErrors();
     TGraphErrors* gB = new TGraphErrors();
     int na = 0, nb = 0;
@@ -291,13 +291,13 @@ void summary_plot(const char* logPath = "outputs/muonflux.txt",
     gB->SetMarkerSize(1.0);
     gB->SetMarkerColor(kRed + 1);
     if (gB->GetN()) gB->Draw("P SAME");
- 
+
     TLine* sl = new TLine(sigLine, 0.0, sigLine, n);
     sl->SetLineStyle(2);
     sl->SetLineColor(kRed + 1);
     sl->SetLineWidth(2);
     sl->Draw();
- 
+
     TLatex hR;
     hR.SetNDC();
     hR.SetTextAlign(12);
@@ -306,10 +306,10 @@ void summary_plot(const char* logPath = "outputs/muonflux.txt",
     hR.SetTextSize(0.026);
     hR.SetTextColor(kRed + 1);
     hR.DrawLatex(0.02, 0.925, Form("red: significance > %.0f#sigma", sigLine));
- 
+
     c->Print(Form("%s_effectsize.pdf", outPrefix));
   }
- 
+
   // ============ page 2: A^2 ranking ============
   if (!P.shapes.empty()) {
     std::vector<std::string> vars, charges;
@@ -321,14 +321,14 @@ void summary_plot(const char* logPath = "outputs/muonflux.txt",
       if (!fv) vars.push_back(P.shapes[i].var);
       if (!fc) charges.push_back(P.shapes[i].charge);
     }
- 
+
     TCanvas* c = new TCanvas("cr", "ranking", 950, 780);
     c->SetLeftMargin(0.22);
     c->SetRightMargin(0.05);
     c->SetTopMargin(0.14);
     c->SetBottomMargin(0.13);
     c->SetLogx();
- 
+
     double amax = 1.0, amin = 1e30;
     for (size_t i = 0; i < P.shapes.size(); ++i) {
       amax = std::max(amax, P.shapes[i].a2);
@@ -343,7 +343,7 @@ void summary_plot(const char* logPath = "outputs/muonflux.txt",
     fr->GetXaxis()->SetTitle("A^{2}   (larger = the distributions differ more)");
     fr->GetXaxis()->SetTitleSize(0.040);
     fr->Draw();
- 
+
     const int mstyle[3] = {20, 22, 23};
     const int mcol[3] = {kAzure + 2, kOrange + 8, kSpring - 6};
     for (size_t ci = 0; ci < charges.size() && ci < 3; ++ci) {
@@ -362,7 +362,7 @@ void summary_plot(const char* logPath = "outputs/muonflux.txt",
       g->SetMarkerColor(mcol[ci]);
       g->SetLineColor(mcol[ci]);
       if (g->GetN()) g->Draw("P SAME");
- 
+
       TText* lg = new TText(0.0, 0.0, charges[ci].c_str());
       lg->SetNDC();
       lg->SetX(0.70);
@@ -372,7 +372,7 @@ void summary_plot(const char* logPath = "outputs/muonflux.txt",
       lg->SetTextAlign(12);
       lg->Draw();
     }
- 
+
     TLatex h;
     h.SetNDC();
     h.SetTextAlign(12);
@@ -387,9 +387,7 @@ void summary_plot(const char* logPath = "outputs/muonflux.txt",
                 "theta and r follow from p geometrically; pT does not.");
     c->Print(Form("%s_a2ranking.pdf", outPrefix));
   }
- 
+
   ::Info("summary_plot", "wrote %s_effectsize.pdf and %s_a2ranking.pdf", outPrefix,
          outPrefix);
 }
- 
-

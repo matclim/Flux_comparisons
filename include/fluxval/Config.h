@@ -4,19 +4,19 @@
 // No production-level or truth information is used anywhere: the comparison is
 // between the muons the two productions deliver, not between the processes
 // that made them.
- 
+
 #pragma once
- 
-#include "muonflux/Core.h"
- 
+
+#include "fluxval/Core.h"
+
 #include <cmath>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <vector>
- 
-namespace mfl {
- 
+
+namespace fluxval {
+
 /// Variable indices.  Keep in sync with kVars and with fillRow() in Load.cxx.
 /// The particle family under test.  Everything that depends on the species --
 /// which PDG codes are accepted, whether q*x is meaningful, and what the two
@@ -29,7 +29,7 @@ struct Species {
   std::string posLabel = "mu+";   // sign index 0: PDG < 0, the antilepton
   std::string negLabel = "mu-";   // sign index 1: PDG > 0
 };
- 
+
 /// Electric charge from a PDG code, for the species this tool handles.
 /// Charged leptons: PDG 13 is mu-, so the charge is minus the sign of the code.
 /// Neutrinos (12, 14, 16) are neutral.
@@ -38,12 +38,12 @@ inline int chargeOfPdg(int pdg) {
   if (a == 12 || a == 14 || a == 16) return 0;
   return (pdg > 0) ? -1 : +1;
 }
- 
+
 /// Sign class index: 0 for PDG < 0 (mu+, nubar), 1 for PDG > 0 (mu-, nu).
 /// Defined on the PDG code rather than the charge so that it survives the
 /// neutral case, where the charge carries no information.
 inline int signIndexOfPdg(int pdg) { return (pdg < 0) ? 0 : 1; }
- 
+
 inline Species makeSpecies(const std::vector<int>& pdgAbs) {
   Species sp;
   sp.pdgAbs = pdgAbs.empty() ? std::vector<int>{13} : pdgAbs;
@@ -55,7 +55,7 @@ inline Species makeSpecies(const std::vector<int>& pdgAbs) {
     throw std::runtime_error(
         "--pdg mixes charged and neutral species; the sign classes and the q*x "
         "observable would be inconsistent. Run them separately.");
- 
+
   if (sp.neutral) {
     sp.name = (sp.pdgAbs.size() == 1)
                   ? (sp.pdgAbs[0] == 12 ? "nu_e"
@@ -70,7 +70,7 @@ inline Species makeSpecies(const std::vector<int>& pdgAbs) {
   }
   return sp;
 }
- 
+
 enum VarIdx {
   kLogP = 0,   // log10(p / GeV)
   kLogPz,      // log10(pz / GeV)
@@ -82,13 +82,13 @@ enum VarIdx {
   kR,          // sqrt(x^2 + y^2) [cm]
   kNVar
 };
- 
+
 struct VarDef {
   const char* name;
   const char* axis;
   bool logyPlot;
 };
- 
+
 inline const std::vector<VarDef>& varDefs() {
   static const std::vector<VarDef> v = {
       {"log10_p", "log_{10}(p / GeV)", true},
@@ -102,7 +102,7 @@ inline const std::vector<VarDef>& varDefs() {
   };
   return v;
 }
- 
+
 /// Default regions.  All cuts are expressed in the transformed variable, so
 /// the physical value is given in the name for readability.
 ///
@@ -118,10 +118,10 @@ inline std::vector<int> defaultVars(const Species& sp) {
   }
   return v;
 }
- 
-inline std::vector<mfc::Region> defaultRegions(const Species& sp) {
+
+inline std::vector<fluxval::Region> defaultRegions(const Species& sp) {
   auto L = [](double gev) { return std::log10(gev); };
-  std::vector<mfc::Region> r = {
+  std::vector<fluxval::Region> r = {
       {"p > 50 GeV", kLogP, L(50.0), 1e300, 0},
       {"p > 100 GeV", kLogP, L(100.0), 1e300, 0},
       {"p > 200 GeV", kLogP, L(200.0), 1e300, 0},
@@ -141,23 +141,23 @@ inline std::vector<mfc::Region> defaultRegions(const Species& sp) {
     r.insert(r.begin() + 10, {"qx > 0", kQX, 0.0, 1e300, 0});
   return r;
 }
- 
+
 /// Quantities reported for each sample and compared between them.
 /// Column 0 of the accumulator is the sample total, so {name, k, 0} is the
 /// fraction of the flux in region k-1.
 /// Quantities are resolved against the region list BY NAME.  Hand-maintained
 /// numeric indices break silently the moment a region is inserted, which is a
 /// poor property for shared code.
-inline std::vector<mfc::Quantity> defaultQuantities(
-    const Species& sp, const std::vector<mfc::Region>& regs) {
+inline std::vector<fluxval::Quantity> defaultQuantities(
+    const Species& sp, const std::vector<fluxval::Region>& regs) {
   auto idx = [&regs](const std::string& nm) {
     for (std::size_t i = 0; i < regs.size(); ++i)
       if (regs[i].name == nm) return static_cast<int>(i) + 1;  // column 0 = total
     throw std::runtime_error("no region named '" + nm + "'");
   };
   const std::string P = sp.posLabel, N = sp.negLabel;
- 
-  std::vector<mfc::Quantity> q;
+
+  std::vector<fluxval::Quantity> q;
   for (const char* nm : {"p > 50 GeV", "p > 100 GeV", "p > 200 GeV", "p > 300 GeV",
                          "pT > 1 GeV", "pT > 2 GeV", "theta > 20 mrad",
                          "theta > 50 mrad", "r > 100 cm", "r > 200 cm"})
@@ -169,5 +169,5 @@ inline std::vector<mfc::Quantity> defaultQuantities(
   q.push_back({"f(p>100 | " + N + ")", idx(N + ", p > 100"), idx(N)});
   return q;
 }
- 
-}  // namespace mfl
+
+}  // namespace fluxval

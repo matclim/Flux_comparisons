@@ -7,12 +7,12 @@
  
 #pragma once
  
-#include "muonflux/Core.h"
+#include "fluxval/Core.h"
  
 #include <string>
 #include <vector>
  
-namespace mfl {
+namespace fluxval {
  
 struct LoadOpts {
   std::string tree = "cbmsim";
@@ -33,11 +33,16 @@ struct LoadOpts {
   int nBlocks = 200;   // random event blocks when there are too few files
   int minFiles = 5;    // use files as units at or above this count
  
-  // Input reduction.  sampleFrac keeps a deterministic random subset of
-  // events, which is unbiased and works the same whatever rdfentry_ means
-  // across a chain; maxFiles simply truncates the file list.
   bool progress = true;  // show a progress bar while reading
-  double sampleFrac = 1.0;
+ 
+  // Input reduction.  maxEvents takes the FIRST N entries of the sample's file
+  // list, in list order, via RDataFrame::Range.  A prefix is used rather than
+  // a hashed pseudo-random subset because a prefix is trivially reproducible:
+  // two loads of the same list necessarily see the same entries.  A hashed
+  // subset did not provide that -- comparing one file against itself under it
+  // yielded two different samples -- so it was removed.  Range is rejected
+  // under implicit MT, so setting this disables threading for the read.
+  long long maxEvents = 0;  // 0 = no limit
   int maxFiles = 0;
 };
  
@@ -47,11 +52,12 @@ std::vector<std::string> splitList(const std::string& spec);
 /// Read a limited number of entries from the front of both file lists to fix
 /// the histogram ranges.  Both samples must share one grid, or pooling them
 /// would be meaningless.
-mfc::HistSpec probeRange(const std::vector<std::string>& a,
+fluxval::HistSpec probeRange(const std::vector<std::string>& a,
                          const std::vector<std::string>& b, const LoadOpts& o);
  
 /// One pass over every file, filling the accumulator.
-mfc::UnitHists loadHists(const std::vector<std::string>& files, const LoadOpts& o,
-                         const mfc::HistSpec& spec, const std::string& label);
+fluxval::UnitHists loadHists(const std::vector<std::string>& files, const LoadOpts& o,
+                         const fluxval::HistSpec& spec, const std::string& label);
  
-}  // namespace mfl
+}  // namespace fluxval
+

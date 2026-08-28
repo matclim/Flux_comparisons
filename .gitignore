@@ -1,0 +1,28 @@
+build/
+*.o
+*.so
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+
+# run products
+outputs/
+out*/
+audit/
+ctl*/
+*.pdf
+*.png
+*.root
+*.log
+!doc/*.pdf
+
+# site-specific
+*_mu.txt
+paths*
+*.tar.gz
+files.zip
+
+*~
+*.swp
+.*.swp
+.DS_Store

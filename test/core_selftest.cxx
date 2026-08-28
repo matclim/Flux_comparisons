@@ -19,28 +19,28 @@
 //     bootstrap error is of the right size.
 //  5. PERMUTATION UNIT.  Correlated copies inside one event do not narrow the
 //     null when the event is the permutation unit.
- 
-#include "muonflux/Core.h"
- 
+
+#include "fluxval/Core.h"
+
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
- 
-using namespace mfc;
- 
+
+using namespace fluxval;
+
 static int g_fail = 0;
- 
+
 static void check(bool ok, const std::string& what) {
   std::printf("  [%s] %s\n", ok ? " ok " : "FAIL", what.c_str());
   if (!ok) ++g_fail;
 }
- 
+
 // ---------------------------------------------------------------------------
 // Synthetic sample builders
 // ---------------------------------------------------------------------------
- 
+
 enum class Law { Normal, MatchedTail, Shifted };
- 
+
 // Two-variable sample: var[0] is the variable under test, var[1] is a
 // spectator used to check the region machinery.
 static Sample makeSample(const std::string& lab, uint64_t seed, int nEvents, Law law,
@@ -51,7 +51,7 @@ static Sample makeSample(const std::string& lab, uint64_t seed, int nEvents, Law
   std::lognormal_distribution<double> lw(0.0, 0.8);
   std::poisson_distribution<int> mult(2.0);
   std::uniform_real_distribution<double> uni(0.0, 1.0);
- 
+
   Sample S;
   S.label = lab;
   S.nvar = 2;
@@ -88,7 +88,7 @@ static Sample makeSample(const std::string& lab, uint64_t seed, int nEvents, Law
   S.compactUnits();
   return S;
 }
- 
+
 // Fisher-style standardised mean difference: what the current code measures.
 static double meanSeparation(const Sample& A, const Sample& B, int j) {
   auto mv = [&](const Sample& S) {
@@ -105,7 +105,7 @@ static double meanSeparation(const Sample& A, const Sample& B, int j) {
   const double sp = std::sqrt(0.5 * (a.second + b.second));
   return (b.first - a.first) / sp;
 }
- 
+
 static ShapeResult run(const Sample& A, const Sample& B, int nperm, uint64_t seed,
                        int nbins = 128) {
   Sample a = A, b = B;
@@ -114,9 +114,9 @@ static ShapeResult run(const Sample& A, const Sample& B, int nperm, uint64_t see
   const PooledVar P = buildPooled(a, b, 0, nbins);
   return shapeTest(P, "x", nperm, seed, 0, 0.0);
 }
- 
+
 // ---------------------------------------------------------------------------
- 
+
 int main() {
   std::printf("\n=== 1. scale invariance ===\n");
   {
@@ -132,7 +132,7 @@ int main() {
     check(r1.pAD == r2.pAD, "permutation p-value unchanged under rescaling");
     std::printf("        AD = %.6f (x1)   %.6f (x1000)\n", r1.obs.AD, r2.obs.AD);
   }
- 
+
   std::printf("\n=== 2. null closure: same law, different seeds ===\n");
   {
     int nSmall = 0;
@@ -149,7 +149,7 @@ int main() {
                 nSmall, nTrial, pmin);
     check(nSmall <= 3, "null closure: p-values are not systematically small");
   }
- 
+
   std::printf("\n=== 3. tail sensitivity at matched mean AND variance ===\n");
   {
     const Sample A = makeSample("A", 11, 6000, Law::Normal);
@@ -164,7 +164,7 @@ int main() {
     check(r.pAD <= 1.0 / 201.0 + 1e-12, "AD rejects at the permutation floor");
     check(r.zAD > r.zKS, "AD is more sensitive than KS on a tail difference");
   }
- 
+
   std::printf("\n=== 4. fractions and charge ratio ===\n");
   {
     const Sample A = makeSample("A", 21, 5000, Law::Normal, 1.0, 0.50);
@@ -187,7 +187,7 @@ int main() {
           "injected charge-ratio change 1.00 -> 1.50 is detected");
     check(res[0].ea > 0.0 && res[1].ea > 0.0, "bootstrap errors are non-zero");
   }
- 
+
   std::printf("\n=== 5. correlated copies inside one event ===\n");
   {
     // splitmult-like: each muon written 4 times with w/4, all inside one event.
@@ -199,7 +199,7 @@ int main() {
     check(r.pAD > 0.01,
           "event-level permutation is not fooled by within-event duplicates");
   }
- 
+
   std::printf("\n=== 6. shape-ratio bootstrap band ===\n");
   {
     const Sample A = makeSample("A", 41, 4000, Law::Normal, 1.0);
@@ -220,7 +220,7 @@ int main() {
     check(nb > 10, "band covers the range");
     check(npull <= 1, "shape ratio is compatible with 1 despite a 250x rate ratio");
   }
- 
+
   std::printf("\n=== 7. streamed accumulator vs exact per-muon path ===\n");
   {
     // Same data, same units, same number of coarse bins.  The only difference
@@ -237,10 +237,10 @@ int main() {
     }
     A.normaliseWeights();
     B.normaliseWeights();
- 
+
     const ShapeResult exact =
         shapeTest(buildPooled(A, B, 0, 64), "x", 200, 4242, 0, 0.0);
- 
+
     HistSpec sp;
     sp.nvar = 1;
     sp.nfine = 4096;
@@ -249,7 +249,7 @@ int main() {
       for (double x : S->var[0]) { lo = std::min(lo, x); hi = std::max(hi, x); }
     sp.lo = {lo - 1e-9};
     sp.hi = {hi + 1e-9};
- 
+
     UnitHists HA, HB;
     HA.alloc(sp, nBlk);
     HB.alloc(sp, nBlk);
@@ -264,7 +264,7 @@ int main() {
     const std::vector<int> fe = equalWeightFineEdges(HA, HB, 0, -1, 64);
     const ShapeResult streamed =
         shapeTest(buildPooledFromHists(HA, HB, 0, -1, fe), "x", 200, 4242, 0, 0.0);
- 
+
     std::printf("        exact    A^2 = %10.4f   p = %.4g\n", exact.obs.AD, exact.pAD);
     std::printf("        streamed A^2 = %10.4f   p = %.4g\n", streamed.obs.AD,
                 streamed.pAD);
@@ -274,7 +274,7 @@ int main() {
     check(rel < 0.05, "streamed A^2 matches the exact value to better than 5%");
     check(streamed.pAD == exact.pAD, "same permutation p-value");
     check(HA.clamped == 0 && HB.clamped == 0, "nothing clamped at the range edges");
- 
+
     // Scale invariance must survive the streamed path too.
     UnitHists HB2 = HB;
     for (auto& x : HB2.h) x *= 1000.0;
@@ -287,7 +287,7 @@ int main() {
     check(std::fabs(scaled.obs.AD - streamed.obs.AD) < 1e-9 * streamed.obs.AD,
           "streamed path is invariant to a 1000x weight rescaling");
   }
- 
+
   std::printf("\n=== 8. splitUnits closure on the streamed path ===\n");
   {
     Sample A = makeSample("A", 61, 8000, Law::Normal);
@@ -317,7 +317,7 @@ int main() {
                 halves.second.nUnits, r.pAD);
     check(r.pAD > 0.01, "splitting one sample by units gives no false difference");
   }
- 
+
   std::printf("\n=== 9. coarsening the fine grid is exact ===\n");
   {
     // Merging 4 adjacent fine bins must give bit-identical content to having
@@ -349,7 +349,7 @@ int main() {
     check(HM.spec.nfine == HC.spec.nfine, "merged grid has the right size");
     check(maxdiff < 1e-12, "merging is exact, so the scan needs no extra read");
   }
- 
+
   std::printf("\n%s  (%d failure%s)\n\n", g_fail ? "SELFTEST FAILED" : "SELFTEST PASSED",
               g_fail, g_fail == 1 ? "" : "s");
   return g_fail ? 1 : 0;

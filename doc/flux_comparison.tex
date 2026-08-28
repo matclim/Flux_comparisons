@@ -1,0 +1,1105 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\IfFileExists{lmodern.sty}{\usepackage{lmodern}}{}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black,
+            citecolor=blue!50!black]{hyperref}
+
+\lstset{basicstyle=\ttfamily\footnotesize, breaklines=true, frame=single,
+        framesep=4pt, rulecolor=\color{black!30},
+        backgroundcolor=\color{black!3}, columns=fullflexible}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{assumption}{Assumption}[section]
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}[section]
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}[section]
+
+\newcommand{\Neff}{N_{\mathrm{eff}}}
+\newcommand{\Ind}{\mathbf{1}}
+\newcommand{\Rr}{\mathcal{R}}
+\newcommand{\Tt}{\mathcal{T}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\Exp}{\mathbb{E}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\dif}{\mathrm{d}}
+
+\title{\bfseries A scale-invariant, distribution-free procedure for comparing\\
+weighted muon fluxes from different simulation productions}
+\author{Muon flux validation}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+We define and validate a procedure for testing whether the muon fluxes
+delivered by two Monte Carlo productions are statistically compatible. The
+procedure is constrained by three features of the data: the total weight of a
+sample is a generation setting and carries no physical information, so all
+statistics must be invariant under independent rescaling of either sample's
+weights; the distributions are non-Gaussian with heavy tails that carry
+physics; and the events are weighted with strongly concentrated weights, so
+the number of muons is not the number of independent observations (Sec.~\ref{sec:neff}). We adopt
+(i) ratios of weighted sums within a single sample, with uncertainties from a
+nonparametric bootstrap over resampling units, and (ii) a weighted two-sample
+Anderson--Darling statistic whose null distribution is obtained by permutation
+of unit labels. We state the assumptions under which each is valid, give the
+exact discrete forms evaluated by the implementation, and quantify the
+approximations introduced by binning and by the substitution of effective
+sample sizes for counts. We show that permutation calibration renders the
+validity of the test independent of both approximations, which affect power
+only. The procedure is validated by unit tests, closure, a calibration scan of
+the p-value distribution under the null, a binning-stability scan, and an audit
+of the weight bookkeeping of split productions (Sec.~\ref{sec:audit}). We report
+its application to a pair of FairShip productions.
+\end{abstract}
+
+\tableofcontents
+
+% ===========================================================================
+\section{Introduction and problem statement}
+
+Let two Monte Carlo productions each deliver a set of muons crossing a fixed
+reference plane, each muon carrying a statistical weight. We wish to test the
+hypothesis that the two productions generate muons from the same distribution
+over the observable phase space.
+
+Section~\ref{sec:setup} fixes the notation and states the null hypothesis;
+Sec.~\ref{sec:scale} states the invariance the data impose. Four properties of
+the data determine the method.
+
+\begin{enumerate}
+\item[(P1)] \textbf{The normalisation is not observable.} The productions are
+generated with deliberately different muon rates; the total weight of a sample
+is therefore a configuration choice. Any statistic sensitive to it measures the
+generator setup rather than the physics. Since the normalisation difference is
+typically the largest single discrepancy in the data, this is a binding
+constraint rather than a technicality.
+
+\item[(P2)] \textbf{The distributions are not Gaussian.} Momentum spectra fall
+over several orders of magnitude and angular distributions are sharply peaked.
+Procedures that compare only first and second moments --- for instance a Fisher
+linear discriminant --- have zero power against alternatives that preserve
+those moments. Section~\ref{sec:validation} exhibits such an alternative
+explicitly.
+
+\item[(P3)] \textbf{The tails carry information.} The physics of interest
+includes the high-momentum and large-angle regions, which are sparsely
+populated. A test must weight discrepancies there commensurately with their
+statistical precision rather than being dominated by the bulk.
+
+\item[(P4)] \textbf{The observations are weighted and correlated.} Biased
+generation produces highly non-uniform weights; muons originating in the same
+primary interaction, and copies of the same muon produced by variance-reduction
+splitting, are mutually dependent.
+\end{enumerate}
+
+% ===========================================================================
+\section{Notation and formal setup}
+\label{sec:setup}
+
+\begin{definition}[Sample]
+\label{def:sample}
+A \emph{sample} is a finite multiset
+\begin{equation}
+  \mathcal{S} = \bigl\{(x_i,\, w_i,\, u_i)\bigr\}_{i=1}^{n},
+\end{equation}
+where $x_i \in \mathbb{R}^d$ is the observable vector of muon $i$, $w_i > 0$ is
+its weight, and $u_i \in \{1,\dots,m\}$ labels the \emph{resampling unit}
+containing it. We write $\Rr$ for the reference sample (of size $n_\Rr$ over
+$m_\Rr$ units) and $\Tt$ for the test sample.
+\end{definition}
+
+In Definition~\ref{def:sample} the weight $w_i$ is the value stored by the simulation for the track producing
+the muon (in \textsc{FairShip}, \texttt{MCTrack.fW}), inherited by a plane hit
+from the track that generated it. Its absolute normalisation is convention; see
+(P1).
+
+\begin{definition}[Resampling unit]
+\label{def:unit}
+A resampling unit is a subset of muons treated as a single indivisible
+observation. Two choices are used: a \emph{file}, i.e.\ all muons written by
+one simulation job; and an \emph{event block}, a set of whole tree entries
+assigned by a fixed hash. The unit is the file when $m \ge 5$ and an event
+block otherwise. Every muon belongs to exactly one unit, and units partition
+the sample.
+\end{definition}
+
+The purpose of Definition~\ref{def:unit} is to make the objects resampled by the
+permutation and bootstrap procedures mutually independent, or close enough to
+it, despite (P4): muons sharing a primary interaction, and splitting copies of a
+single muon, lie in the same tree entry and therefore in the same unit.
+
+\begin{definition}[Observables]
+For a muon with momentum $(p_x,p_y,p_z)$, transverse position $(x,y)$ at the
+plane, and electric charge $q \in \{+1,-1\}$, write
+$p = (p_x^2+p_y^2+p_z^2)^{1/2}$, $p_T = (p_x^2+p_y^2)^{1/2}$ and
+$\theta = \arctan\!\left(p_T/|p_z|\right)$. The eight scalar observables tested
+are
+\begin{align}
+  x^{(1)} &= \log_{10}(p/\mathrm{GeV}), &
+  x^{(2)} &= \log_{10}(p_z/\mathrm{GeV}), \notag\\
+  x^{(3)} &= \operatorname{arcsinh}\!\left(p_T/\varepsilon\right),\
+            \varepsilon = 0.05~\mathrm{GeV}, &
+  x^{(4)} &= \log_{10}(\theta/\mathrm{mrad}), \notag\\
+  x^{(5)} &= x, \quad x^{(6)} = y, &
+  x^{(7)} &= q\,x, \quad x^{(8)} = (x^2+y^2)^{1/2}. \label{eq:obs}
+\end{align}
+Only quantities measured at the plane enter; no generator-level or ancestry
+information is used. Muons are selected by $|\mathrm{PDG}| = 13$,
+$p_{\min} \le p \le p_{\max}$ and $p_z > 0$.
+\end{definition}
+
+The transformations in Eq.~\eqref{eq:obs} are monotone reparametrisations. The
+Anderson--Darling statistic defined in Sec.~\ref{sec:ad} is invariant under
+strictly monotone transformations of the observable, so the choice of
+$\log_{10}$ or $\operatorname{arcsinh}$ affects only the binning and the
+readability of the plots, not the test itself. The variable
+$x^{(7)} = q\,x$ is included because in a magnetised absorber the sign of the
+horizontal displacement relative to the charge carries information that $|x|$
+discards.
+
+\begin{definition}[Null hypothesis]
+\label{def:h0}
+Let $\Rr$ and $\Tt$ be labelled collections of units. The null hypothesis
+$H_0$ is that the units are \emph{exchangeable} between the two labels: the
+joint law of the observed data is invariant under any permutation of the
+assignment of units to $\{\Rr, \Tt\}$ that preserves the group sizes
+$(m_\Rr, m_\Tt)$.
+\end{definition}
+
+Definition~\ref{def:h0} is stronger than ``the two marginal distributions
+coincide'' and weaker than ``all muons are i.i.d.'': it permits arbitrary
+dependence within a unit. It is the hypothesis that the permutation test of
+Sec.~\ref{sec:perm} tests exactly.
+
+% ===========================================================================
+\section{Scale invariance}
+\label{sec:scale}
+
+\begin{assumption}[Arbitrary normalisation]
+\label{ass:scale}
+The physical content of a sample is unchanged under $w_i \mapsto a\,w_i$ for any
+$a>0$, independently for $\Rr$ and $\Tt$.
+\end{assumption}
+
+Assumption~\ref{ass:scale} is a statement about the generation procedure, not
+about the data; it holds because the muon rate per proton on target is set by
+the production configuration. It requires every reported statistic $S$ to
+satisfy
+\begin{equation}
+  S\bigl(\{a w^{\Rr}\}, \{b w^{\Tt}\}\bigr)
+  = S\bigl(\{w^{\Rr}\}, \{w^{\Tt}\}\bigr)
+  \qquad \forall\, a,b>0.
+  \label{eq:invariance}
+\end{equation}
+
+Two consequences follow. First, every reported quantity is a ratio of weighted
+sums \emph{within one sample} (Sec.~\ref{sec:fractions}), which satisfies
+Eq.~\eqref{eq:invariance} identically. Second, the shape statistic is computed
+from normalised empirical distribution functions, and each permutation replica
+is renormalised in the same way, so that no relabelling can respond to the
+normalisation difference (Sec.~\ref{sec:perm}).
+
+\begin{remark}
+Equation~\eqref{eq:invariance} is a genuine restriction and not automatically
+satisfied by standard practice. A classifier trained to discriminate $\Rr$ from
+$\Tt$ using raw weights will learn the normalisation offset, which is the
+largest and most easily learned feature present, and report a separation with no
+physical content. The implementation enforces the invariance by test: one
+sample's weights are multiplied by $10^{3}$ and bit-identical statistics and
+p-values are required.
+\end{remark}
+
+% ===========================================================================
+\section{Effective sample size}
+\label{sec:neff}
+
+\begin{definition}[Effective sample size]
+For a sample with weights $\{w_i\}_{i=1}^n$,
+\begin{equation}
+  \Neff = \frac{\left(\sum_{i=1}^{n} w_i\right)^{2}}{\sum_{i=1}^{n} w_i^{2}} .
+  \label{eq:neff}
+\end{equation}
+\end{definition}
+
+Equation~\eqref{eq:neff} is Kish's effective sample size~\cite{Kish1965}. Its
+justification is as follows. Let $\bar{y} = \sum_i w_i y_i / \sum_i w_i$ be a
+weighted mean of independent quantities $y_i$ with common variance $\sigma^2$,
+the weights treated as fixed. Then
+\begin{equation}
+  \Var(\bar{y})
+  = \sigma^{2}\,\frac{\sum_i w_i^{2}}{\left(\sum_i w_i\right)^{2}}
+  = \frac{\sigma^{2}}{\Neff},
+\end{equation}
+so $\Neff$ is the number of equally weighted observations giving the same
+variance. The ratio $n/\Neff \ge 1$ is the design effect, with equality if and
+only if all weights are equal.
+
+\begin{proposition}[Inflation of $\Neff$ by splitting]
+\label{prop:split}
+Suppose each muon of weight $w$ is replaced by $k$ copies of weight $w/k$.
+Then $\sum_i w_i$ is unchanged, $\sum_i w_i^{2}$ is divided by $k$, and hence
+$\Neff$ is multiplied by $k$.
+\end{proposition}
+
+\begin{proof}
+$k \cdot (w/k) = w$ and $k \cdot (w/k)^2 = w^2/k$; substitute in
+Eq.~\eqref{eq:neff}.
+\end{proof}
+
+Proposition~\ref{prop:split} implies that for a production employing splitting,
+Eq.~\eqref{eq:neff} is an \emph{upper bound} on the effective number of
+independent observations, attained only if the copies are statistically
+independent. Since copies of one muon are propagated separately through the
+absorber they are neither identical nor independent, and the true value lies
+between $\Neff/k$ and $\Neff$. Reported values of $\Neff$ for split samples must
+be read with this in mind.
+
+The uncertainties quoted in this work do not use Eq.~\eqref{eq:neff}: they are
+obtained by resampling whole units (Sec.~\ref{sec:bootstrap}), under which
+splitting copies move together and their dependence is accounted for
+automatically. Empirically, for the samples of Sec.~\ref{sec:results} the ratio
+of bootstrap variances between a split and an unsplit sample was $1.3$, against
+a factor $15$ implied by the ratio of their $\Neff$ values --- confirming both
+that Eq.~\eqref{eq:neff} overstates the information content and that the
+bootstrap does not inherit the error.
+
+% ===========================================================================
+\section{Tests of relative amounts}
+\label{sec:fractions}
+
+\subsection{Estimands and estimators}
+
+\begin{definition}[Flux fraction]
+For a measurable region $R \subseteq \mathbb{R}^d$ of muon phase space, the
+flux fraction of a sample is the estimand
+\begin{equation}
+  f_R = \frac{\Exp\!\left[w\,\Ind\{x \in R\}\right]}{\Exp[w]},
+\end{equation}
+estimated by
+\begin{equation}
+  \hat{f}_R(\mathcal{S})
+  = \frac{\sum_{i:\,x_i \in R} w_i}{\sum_{i} w_i}.
+  \label{eq:fhat}
+\end{equation}
+\end{definition}
+
+Equation~\eqref{eq:fhat} is a ratio of weighted sums within one sample and
+therefore satisfies Eq.~\eqref{eq:invariance}. Taking $R$ to select a charge
+gives the charge ratio
+\begin{equation}
+  \hat{\rho} = \frac{\sum_{i:\, q_i = +1} w_i}{\sum_{i:\, q_i = -1} w_i},
+\end{equation}
+likewise scale invariant. The default region set consists of one-sided cuts on
+the observables of Eq.~\eqref{eq:obs}, optionally restricted to one charge.
+
+\subsection{Uncertainties: nonparametric bootstrap over units}
+\label{sec:bootstrap}
+
+Let $\mathcal{S}$ have units $1,\dots,m$ and let $\hat{\phi}(\mathcal{S})$ be
+any of the above estimators. A bootstrap replica is formed by drawing $m$ unit
+indices with replacement from $\{1,\dots,m\}$ and recomputing $\hat{\phi}$ from
+the union of the drawn units~\cite{Efron1979,DavisonHinkley1997}. With $B$
+replicas $\hat{\phi}^{*(1)},\dots,\hat{\phi}^{*(B)}$ we take
+\begin{equation}
+  \hat{\sigma}^{2}
+  = \frac{1}{B-1}\sum_{b=1}^{B}
+    \left(\hat{\phi}^{*(b)} - \overline{\hat{\phi}^{*}}\right)^{2},
+  \qquad B = 400 .
+\end{equation}
+
+\begin{assumption}[Unit independence]
+\label{ass:units}
+The units of a sample are independent and identically distributed draws from a
+population of units.
+\end{assumption}
+
+Assumption~\ref{ass:units} is what makes the bootstrap consistent here. It
+justifies the choice of the file as the unit whenever enough files exist: files
+correspond to independent simulation jobs, so their mutual independence is
+plausible by construction, whereas events within a job share a configuration.
+Resampling files propagates job-to-job variation into $\hat{\sigma}$
+automatically, and in particular removes the need for the ad-hoc
+error-inflation factors used in earlier analyses of these samples.
+
+\subsection{Comparison statistic}
+
+For a quantity $\phi$ measured in both samples we report the relative
+difference and the standardised difference (``pull''),
+\begin{equation}
+  \Delta = \frac{\hat{\phi}_\Tt - \hat{\phi}_\Rr}{\hat{\phi}_\Rr},
+  \qquad
+  t = \frac{\hat{\phi}_\Tt - \hat{\phi}_\Rr}
+           {\sqrt{\hat{\sigma}_\Tt^{2} + \hat{\sigma}_\Rr^{2}}} .
+  \label{eq:pull}
+\end{equation}
+Addition of the variances in quadrature is valid because $\Rr$ and $\Tt$ are
+independent samples.
+
+\begin{remark}[Status of the pull]
+\label{rem:pull}
+Equation~\eqref{eq:pull} is a Wald-type statistic. Interpreting $t$ as a
+standard normal deviate requires the sampling distribution of
+$\hat{\phi}_\Tt - \hat{\phi}_\Rr$ to be approximately Gaussian, which holds
+asymptotically in the number of units but is not guaranteed at $m_\Tt = 62$,
+particularly if the weight is concentrated in a few units. Where a calibrated
+interval is required, a studentised or bias-corrected accelerated bootstrap
+interval~\cite{DavisonHinkley1997} should be substituted. We therefore quote
+$\Delta$ with $\hat{\sigma}$ as the primary result and treat $t$ as an ordering
+device.
+\end{remark}
+
+A quantity is reported as non-comparable, and excluded from all summaries, when
+a region is empty in either sample or when $\hat{\sigma}/|\hat{\phi}| > 1/2$ in
+either sample. Such a quantity is an absence of measurement, not a null result.
+
+% ===========================================================================
+\section{The two-sample Anderson--Darling test}
+\label{sec:ad}
+
+The tests of the previous section respond to a difference only where a cut is
+placed. This section defines a test of the full one-dimensional distribution.
+
+\subsection{Weighted empirical distribution functions}
+
+\begin{definition}[Weighted EDF]
+For a sample $\mathcal{S}$ and a scalar observable $x^{(j)}$,
+\begin{equation}
+  \hat{F}(t) = \frac{\sum_{i} w_i\, \Ind\{x^{(j)}_i \le t\}}{\sum_{i} w_i},
+  \label{eq:edf}
+\end{equation}
+where $\Ind\{\cdot\}$ denotes the indicator function. $\hat{F}$ is
+non-decreasing, right-continuous, and satisfies $\hat{F}(-\infty)=0$ and
+$\hat{F}(+\infty)=1$.
+\end{definition}
+
+The normalisation in Eq.~\eqref{eq:edf} is precisely Eq.~\eqref{eq:invariance}:
+$\hat{F}$ is unchanged under $w \mapsto aw$. The quantity $\hat{F}(t)$ is the
+fraction of the sample's flux lying at or below $t$.
+
+\subsection{The statistic}
+
+Write $\hat{F}_\Rr, \hat{F}_\Tt$ for the two weighted EDFs and let
+$\nu_\Rr, \nu_\Tt > 0$ be weights assigned to the samples (specified in
+Sec.~\ref{sec:neffsub}), with $N = \nu_\Rr + \nu_\Tt$. Define the pooled
+distribution function
+\begin{equation}
+  \hat{H}(t) = \frac{\nu_\Rr \hat{F}_\Rr(t) + \nu_\Tt \hat{F}_\Tt(t)}{N}.
+\end{equation}
+
+\begin{definition}[Two-sample Anderson--Darling statistic]
+\begin{equation}
+  A^{2}
+  = \frac{\nu_\Rr \nu_\Tt}{N}
+    \int_{-\infty}^{\infty}
+    \frac{\bigl[\hat{F}_\Rr(t)-\hat{F}_\Tt(t)\bigr]^{2}}
+         {\hat{H}(t)\bigl[1-\hat{H}(t)\bigr]}\ \dif \hat{H}(t).
+  \label{eq:ad}
+\end{equation}
+\end{definition}
+
+Equation~\eqref{eq:ad} is the two-sample form of the Anderson--Darling
+statistic~\cite{AndersonDarling1952,AndersonDarling1954}, in the version due to
+Pettitt~\cite{Pettitt1976} and generalised to $k$ samples by Scholz and
+Stephens~\cite{ScholzStephens1987}. It belongs to the Cram\'er--von~Mises
+family~\cite{Cramer1928,vonMises1928}
+\begin{equation}
+  \int \bigl[\hat{F}_\Rr - \hat{F}_\Tt\bigr]^{2}\, \psi\!\left(\hat{H}\right)
+  \dif\hat{H},
+  \label{eq:family}
+\end{equation}
+with weight function $\psi(H) = \{H(1-H)\}^{-1}$ in Eq.~\eqref{eq:family}; the choice $\psi \equiv 1$
+gives the Cram\'er--von~Mises statistic $\omega^{2}$, and the supremum
+$\sup_t|\hat{F}_\Rr - \hat{F}_\Tt|$ gives the Kolmogorov--Smirnov
+statistic~\cite{Kolmogorov1933,Smirnov1939}. All three are computed and
+reported.
+
+\subsection{Interpretation of the weight function}
+\label{sec:weighting}
+
+The choice $\psi(H) = \{H(1-H)\}^{-1}$ is not an arbitrary emphasis of the
+tails. For an EDF built from $N$ independent observations, $N\hat{H}(t)$ is
+binomially distributed with mean $NH(t)$, so
+\begin{equation}
+  \Var\bigl[\hat{H}(t)\bigr] = \frac{H(t)\left[1-H(t)\right]}{N}.
+\end{equation}
+Equation~\eqref{eq:ad} therefore divides each squared discrepancy by its own
+expected variance, making $A^2$ an integral of squared standardised residuals.
+In the bulk $H \approx 1/2$ and $H(1-H) \approx 1/4$; at $H = 10^{-3}$ the
+denominator is smaller by a factor $\approx 250$, so a discrepancy of given
+absolute size in that region contributes $\approx 250$ times more. This is the
+behaviour required by (P3): in a sparsely populated tail the two EDFs are
+constrained to lie close together, so a separation there is correspondingly more
+informative.
+
+Reporting $A^2$, $\omega^2$ and $D$ together is itself diagnostic: rejection by
+$A^2$ alone localises the discrepancy to the tails, whereas concordant rejection
+by all three indicates a difference in the bulk.
+
+\subsection{Distribution-freeness}
+
+\begin{proposition}
+\label{prop:df}
+If $\hat{F}_\Rr$ and $\hat{F}_\Tt$ are the EDFs of independent samples of
+i.i.d.\ observations from a common continuous distribution $F$, the law of
+$A^{2}$ in Eq.~\eqref{eq:ad} does not depend on $F$.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+Substituting $t \mapsto F^{-1}(s)$ maps the integral to one over $s \in (0,1)$
+in which $F$ enters only through the probability integral transform
+$F(x_i) \sim \mathrm{Uniform}(0,1)$. See Ref.~\cite{Pettitt1976}.
+\end{proof}
+
+\begin{remark}
+Proposition~\ref{prop:df} concerns the \emph{two-sample} statistic. It is
+distinct from the \emph{one-sample} Anderson--Darling goodness-of-fit test, for
+which critical values depend on the hypothesised family and on whether its
+parameters were estimated from the data~\cite{Stephens1974}. The frequent
+objection that ``the Anderson--Darling test assumes normality'' refers to the
+one-sample case and does not apply here.
+\end{remark}
+
+In this work Proposition~\ref{prop:df} is used only for orientation: no
+tabulated critical values are employed, and the null distribution is constructed
+by permutation (Sec.~\ref{sec:perm}), which requires neither continuity, nor
+i.i.d.\ sampling, nor unit weights.
+
+\subsection{Substitution of effective sample sizes}
+\label{sec:neffsub}
+
+For unweighted samples Eq.~\eqref{eq:ad} is defined with $\nu_\Rr = n_\Rr$ and
+$\nu_\Tt = n_\Tt$. With weighted, correlated observations neither the counts nor
+the binomial variance argument of Sec.~\ref{sec:weighting} applies exactly. We
+set $\nu_\Rr = \Neff(\Rr)$ and $\nu_\Tt = \Neff(\Tt)$ from
+Eq.~\eqref{eq:neff}.
+
+This substitution is a heuristic: it is exact only for equally weighted
+independent observations, and Proposition~\ref{prop:split} shows it to be biased
+for split samples. Its consequences are nonetheless benign, for the following
+reason.
+
+\begin{proposition}[Validity is independent of the choice of statistic]
+\label{prop:valid}
+Let $S$ be \emph{any} real-valued function of the labelled data, and let its
+null distribution be obtained by permutation of unit labels as in
+Sec.~\ref{sec:perm}. Then under $H_0$ of Definition~\ref{def:h0} the resulting
+p-value is valid, i.e.\ $\Prob(\hat{p} \le \alpha) \le \alpha$ for all
+$\alpha \in (0,1)$.
+\end{proposition}
+
+\begin{proof}[Proof sketch]
+Under exchangeability the observed labelling is, conditionally on the multiset
+of units, uniformly distributed over the group of size-preserving relabellings.
+The observed value of $S$ is therefore exchangeable with the permuted values,
+and the rank-based p-value of Eq.~\eqref{eq:pval} is super-uniform. See
+Refs.~\cite{Fisher1935,Pitman1937,LehmannRomano2005}.
+\end{proof}
+
+Proposition~\ref{prop:valid} is the central structural point. The prefactor
+$\nu_\Rr\nu_\Tt/N$ in Eq.~\eqref{eq:ad} is a fixed positive constant within a
+given permutation experiment, and the weighting $\{H(1-H)\}^{-1}$ is a fixed
+function of the pooled data; neither affects the exchangeability argument.
+Approximations in $\nu$ therefore change the \emph{power} of the test --- which
+alternatives it detects most readily --- but not the validity of its p-values.
+The same argument covers the discretisation of Sec.~\ref{sec:discrete}.
+
+\subsection{The discrete form evaluated by the implementation}
+\label{sec:discrete}
+
+The implementation does not evaluate Eq.~\eqref{eq:ad} on the exact EDFs. Both
+samples are binned onto a common grid of $K$ contiguous bins with edges
+$t_0 < t_1 < \dots < t_K$, chosen so that each bin carries an equal share of the
+pooled weight (Sec.~\ref{sec:binning}). Writing $h^\Rr_k, h^\Tt_k$ for the
+weighted contents of bin $k$ and
+\begin{equation}
+  \hat{F}^{\Rr}_k = \frac{\sum_{l \le k} h^\Rr_l}{\sum_{l} h^\Rr_l},
+  \qquad
+  \hat{F}^{\Tt}_k = \frac{\sum_{l \le k} h^\Tt_l}{\sum_{l} h^\Tt_l},
+  \qquad
+  \hat{H}_k = \frac{\nu_\Rr \hat{F}^{\Rr}_k + \nu_\Tt \hat{F}^{\Tt}_k}{N},
+\end{equation}
+with $\hat{H}_0 = 0$ and $\Delta\hat{H}_k = \hat{H}_k - \hat{H}_{k-1}$, the
+computed statistics are
+\begin{align}
+  A^{2} &= \frac{\nu_\Rr\nu_\Tt}{N} \sum_{k=1}^{K-1}
+           \frac{\bigl(\hat{F}^{\Rr}_k-\hat{F}^{\Tt}_k\bigr)^{2}}
+                {\hat{H}_k\bigl(1-\hat{H}_k\bigr)}\,\Delta \hat{H}_k ,
+           \label{eq:addisc}\\
+  \omega^{2} &= \frac{\nu_\Rr\nu_\Tt}{N} \sum_{k=1}^{K}
+           \bigl(\hat{F}^{\Rr}_k-\hat{F}^{\Tt}_k\bigr)^{2}\,\Delta \hat{H}_k ,
+           \qquad
+  D = \sqrt{\frac{\nu_\Rr\nu_\Tt}{N}}\,
+      \max_{k}\bigl|\hat{F}^{\Rr}_k-\hat{F}^{\Tt}_k\bigr| .
+\end{align}
+The term $k=K$ is excluded from Eq.~\eqref{eq:addisc} because $\hat{H}_K = 1$
+exactly, at which the integrand is singular; this is the discrete counterpart of
+the convergence of the integral in Eq.~\eqref{eq:ad}. An optional threshold
+$\epsilon$ may be imposed, discarding terms with
+$\hat{H}_k(1-\hat{H}_k) \le \epsilon$, to limit the influence of extreme-weight
+observations near the boundaries.
+
+By Proposition~\ref{prop:valid}, Eq.~\eqref{eq:addisc} defines a valid test
+statistic irrespective of $K$. The dependence of the \emph{value} of $A^2$ on
+$K$ is measured directly and reported (Sec.~\ref{sec:binstab}).
+
+\subsection{Binning}
+\label{sec:binning}
+
+Bin edges are placed at equal quantiles of the pooled weighted distribution, so
+that each of the $K$ bins carries $1/K$ of the pooled weight. Two properties
+motivate this choice. First, it equalises the statistical precision across bins,
+so that sparsely populated tails are represented by wide bins containing usable
+statistics rather than by many near-empty narrow bins. Second, it gives
+$\Delta\hat{H}_k \approx 1/K$, so that the sum in Eq.~\eqref{eq:addisc}
+approximates the integral uniformly.
+
+For display, densities $h_k / (t_k - t_{k-1})$ are plotted, since the bin
+contents are flat by construction.
+
+% ===========================================================================
+\section{Calibration by permutation}
+\label{sec:perm}
+
+Let $S$ denote any of $A^2$, $\omega^2$, $D$. Let $\pi$ range over relabellings
+of the $m_\Rr + m_\Tt$ units that preserve the group sizes, and let $S^{(\pi)}$
+be the statistic recomputed under $\pi$, with each pseudo-sample renormalised
+exactly as the observed samples are. Drawing $M$ relabellings uniformly at
+random, the p-value is
+\begin{equation}
+  \hat{p} = \frac{1 + \#\left\{\pi : S^{(\pi)} \ge S^{\mathrm{obs}}\right\}}{1+M}.
+  \label{eq:pval}
+\end{equation}
+
+The test is one-sided because all three statistics are non-negative and large
+values indicate discrepancy. The addition of $1$ to numerator and denominator is
+required for validity when $M$ is finite~\cite{PhipsonSmyth2010}; it implies the
+attainable minimum $\hat{p} = 1/(1+M)$, and results at this bound are flagged as
+such rather than reported as smaller.
+
+Two properties are essential. Units are permuted as wholes, so that within-unit
+dependence --- including splitting copies and muons of a common primary --- is
+preserved under $H_0$ and does not narrow the null distribution. And each
+replica is renormalised, so the null is a pure shape null: no relabelling can
+respond to the normalisation difference of Assumption~\ref{ass:scale}.
+
+\begin{remark}[The reported $z$ is not a significance]
+\label{rem:z}
+The implementation also reports
+\begin{equation*}
+  z = \frac{S^{\mathrm{obs}} - \overline{S^{(\pi)}}}
+           {\mathrm{sd}\bigl(S^{(\pi)}\bigr)} .
+\end{equation*}
+The permutation null of $A^2$ is strongly
+right-skewed, so $z$ admits no interpretation as a normal deviate. It is
+retained solely to order variables whose p-values all attain the bound of
+Eq.~\eqref{eq:pval}; the tables of Sec.~\ref{sec:results} are read accordingly.
+\end{remark}
+
+\subsection{Localisation of the discrepancy}
+\label{sec:profile}
+
+A p-value states whether the samples differ, not where. Since $A^2$ is an
+integral, its integrand is reported. For each observable we plot
+
+\begin{enumerate}
+\item the signed difference $\hat{F}_\Tt(t) - \hat{F}_\Rr(t)$, with pointwise
+$68\%$ and $95\%$ envelopes formed from the empirical quantiles of
+$\hat{F}^{(\pi)}_\Tt - \hat{F}^{(\pi)}_\Rr$ over the same $M$ relabellings.
+Positive values indicate that $\Tt$ has accumulated a larger share of its flux
+below $t$;
+\item the normalised partial sums of Eq.~\eqref{eq:addisc},
+$C_k = \sum_{l \le k} a_l \big/ \sum_{l} a_l$, where $a_l$ denotes the $l$-th
+summand, whose increments identify the bins generating the statistic.
+\end{enumerate}
+
+The second localises better than the first. Because $\hat{F}_\Tt - \hat{F}_\Rr$
+is a difference of cumulative functions constrained to vanish at both ends, a
+discrepancy concentrated at one value appears as a broad excursion; $C_k$ is a
+density in $k$ and exhibits a step. A steady rise of $C_k$ indicates a shift
+distributed over the range, a step indicates a localised feature.
+
+\begin{remark}[Pointwise, not simultaneous]
+The envelopes in item~1 are pointwise quantiles. Under $H_0$ approximately
+$5\%$ of the $K$ bins lie outside the $95\%$ envelope, so inference must be
+drawn from coherent runs of bins. No simultaneous confidence band is
+constructed.
+\end{remark}
+
+% ===========================================================================
+\section{Implementation}
+
+\subsection{Streaming accumulation}
+
+A single production file contains up to $3.6\times10^{7}$ selected muons and a
+full sample up to $2.3\times10^{9}$; per-muon storage is therefore infeasible.
+The implementation accumulates muons directly into fixed histograms indexed by
+(unit, charge, observable) with $n_{\mathrm{fine}}$ bins per observable, so that
+memory scales as
+\begin{equation}
+  \mathcal{O}\!\left(m \times 2 \times d \times n_{\mathrm{fine}}\right),
+\end{equation}
+independent of the number of muons. All files of a sample are processed as a
+single dataset with implicit multi-threading using
+\texttt{ROOT::RDataFrame}~\cite{ROOT,RDataFrame}. All statistics of
+Secs.~\ref{sec:fractions}--\ref{sec:perm} are subsequently computed from these
+histograms; the test bins of Sec.~\ref{sec:binning} are formed by merging fine
+bins.
+
+\begin{proposition}[Exactness of merging]
+\label{prop:merge}
+If the coarse bin edges form a subset of the fine bin edges, the coarse bin
+contents obtained by summing fine bins are identical to those obtained by
+accumulating directly on the coarse grid.
+\end{proposition}
+
+Proposition~\ref{prop:merge} is what permits the binning-stability scan of
+Sec.~\ref{sec:binstab} to be performed without re-reading the data. It is
+verified numerically to $1.8\times10^{-15}$.
+
+\subsection{Approximations introduced}
+
+Two approximations follow from accumulating on a fixed grid, both quantified at
+runtime.
+
+\begin{enumerate}
+\item \emph{Cut snapping.} A region boundary is displaced to the nearest fine
+bin edge, by at most half a fine bin width. With $n_{\mathrm{fine}} = 2048$ over
+the momentum range this is $\lesssim 0.03\%$ in $p$.
+\item \emph{Clamping.} Values outside the recorded range are accumulated in the
+end bins. The recorded range is fixed by a probe over the leading entries of the
+first files of each sample, padded by $35\%$. The clamped fraction is reported;
+it was below $2\times10^{-6}$ in all runs of Sec.~\ref{sec:results}.
+\end{enumerate}
+
+Neither affects the validity of the permutation p-values, by
+Proposition~\ref{prop:valid}.
+
+% ===========================================================================
+\section{Validation}
+\label{sec:validation}
+
+\subsection{Unit tests of the statistical core}
+
+The numerical core is free of external dependencies and is covered by nine
+assertions on synthetic data, of which the substantive ones are:
+
+\begin{center}
+\small
+\begin{tabular}{@{}rp{0.78\textwidth}@{}}
+\toprule
+\# & Assertion \\
+\midrule
+1 & Multiplying one sample's weights by $10^{3}$ leaves $A^{2}$, $\omega^{2}$
+    and $\hat{p}$ bit-identical, verifying Eq.~\eqref{eq:invariance}. \\
+2 & Two independent samples from a common law yield p-values that are not
+    systematically small. \\
+3 & For two laws with identical mean \emph{and} identical variance but
+    different tail behaviour, a Fisher-style standardised mean separation
+    returns $+0.0002$ while $A^{2}$ attains the bound of Eq.~\eqref{eq:pval}
+    with $z = +176$. This demonstrates the failure mode asserted in (P2). \\
+4 & An injected change of the charge ratio from $1.00$ to $1.50$ is detected at
+    $t = 11$ while an unchanged fraction is not, in the presence of a
+    $500\times$ normalisation difference. \\
+5 & Unit-level permutation is not anti-conservative in the presence of exact
+    duplicate observations within a unit. \\
+7 & The streaming implementation reproduces the exact per-muon evaluation of
+    $A^{2}$ to $0.21\%$ with identical p-values. \\
+9 & Merging of fine bins is exact to $1.8\times10^{-15}$
+    (Proposition~\ref{prop:merge}). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Closure}
+
+Supplying the same file as both inputs yields $A^{2} \sim 10^{-27}$ (floating
+point zero), $\hat{p} = 1$ and $t = 0$ for every quantity. Partitioning a single
+sample into two halves by unit and comparing them yields no pull exceeding $3$
+and p-values distributed over $(0,1)$.
+
+\subsection{Calibration of the p-value distribution}
+
+Closure demonstrates the absence of spurious differences but not the calibration
+of $\hat{p}$. Under $H_0$, $\hat{p}$ must be super-uniform on $(0,1)$. The
+half-splitting procedure was therefore repeated $20$ times with independent
+random partitions, yielding $20$ independent p-values per observable. The
+observed means ranged over $[0.427, 0.546]$ against an expected $0.500$ with
+standard error $0.065$; the fraction below $0.05$ was consistent with $0.05$;
+and the Kolmogorov distance from uniformity did not exceed the $5\%$ critical
+value for $n=20$. A P--P plot of the ordered p-values against $k/(n+1)$ is
+produced.
+
+This procedure resolved an apparent anomaly: across three individual runs,
+seven or eight of eight $z$ values were negative, suggesting conservatism. The
+scan showed the p-values to be calibrated. The apparent pattern arises because
+the observables of Eq.~\eqref{eq:obs} are strongly dependent --- four are
+functions of the same momentum components --- so a single run furnishes
+approximately two independent p-values rather than eight.
+
+\subsection{Binning stability}
+\label{sec:binstab}
+
+By Proposition~\ref{prop:merge}, $A^{2}$ can be recomputed on grids coarser by
+factors of $4$ and $16$ from a single pass. Any observable whose value changes
+by more than $35\%$ across these grids is flagged as unconverged.
+
+This check was introduced in response to an observed failure. With
+$n_{\mathrm{fine}} = 512$, the observable $x^{(5)} = x$ returned $A^{2} = 13.3$
+at $\hat{p} < 0.002$, having been compatible in all previous comparisons. Its
+profile (Sec.~\ref{sec:profile}) showed $C_k$ rising as a step over
+$\approx 10$~cm at $x \approx 0$, the signature of a sharp feature straddling a
+bin edge. Refinement to $n_{\mathrm{fine}} = 2048$ reduced $A^{2}$ to $4.5$ and
+to $2.29$ at $8192$, where the three grids agree to better than $1\%$. A genuine
+discrepancy does not diminish under refinement. The default was accordingly
+raised to $2048$.
+
+\subsection{Audit of the weight bookkeeping of split productions}
+\label{sec:audit}
+
+A production employing splitting writes each muon $k$ times with weight $w/k$.
+If performed correctly this is a variance-reduction transformation leaving all
+weighted distributions invariant. If the division is omitted or incorrect, every
+weighted comparison against an unsplit sample is biased, and no property of the
+statistical procedure can compensate.
+
+Splitting acts within a single tree entry, which yields an invariant requiring
+no duplicate detection:
+\begin{equation}
+  \sum_{i \in e} w_i \ \text{is unchanged by splitting for every entry } e
+  \quad\Longrightarrow\quad
+  \frac{\Exp_\Tt\!\left[\sum_{i \in e} w_i\right]}
+       {\Exp_\Rr\!\left[\sum_{i \in e} w_i\right]} = 1 .
+  \label{eq:auditinv}
+\end{equation}
+Two independent estimates of $k$ are also available: from the ratio of mean
+multiplicities, and from the inverse ratio of mean per-muon weights. For the
+samples of Sec.~\ref{sec:results} these gave $k = 64.5$ and $k = 69.2$,
+agreeing to $7.3\%$, with the ratio in Eq.~\eqref{eq:auditinv} equal to
+$0.932$. Absence of the division would have produced $\approx 65$ in place of
+$\approx 1$.
+
+\begin{remark}
+Equation~\eqref{eq:auditinv} constrains the bookkeeping in aggregate. A
+misallocation among the copies of a single muon that preserves the per-entry sum
+would satisfy it. Establishing per-muon correctness requires duplicate
+identification and was not performed.
+\end{remark}
+
+\begin{remark}[A sample-selection hazard]
+Comparisons using a different weight branch of the same jobs produced an
+apparent $50\%$ difference in the momentum spectrum: the same muons gave
+$\sum_i w_i = 5.36\times10^{5}$ against $1.78\times10^{4}$. Consistency of
+branch selection between samples is a precondition for all of the above.
+\end{remark}
+
+% ===========================================================================
+\section{Application}
+\label{sec:results}
+
+\subsection{Staged comparison}
+
+The procedure was applied in stages of increasing scope, each providing a
+control for the next. All entries are $A^{2}$ for $x^{(1)} = \log_{10} p$.
+
+\begin{center}
+\begin{tabular}{@{}llrl@{}}
+\toprule
+Stage & Comparison & $A^{2}$ & $\hat{p}$ \\
+\midrule
+1 & one file against itself & $\sim 10^{-27}$ & $1$ \\
+2 & two jobs of the reference production & $0.25$ & $0.96$ \\
+3 & one file from each production & $7.6$ & $<0.002$ \\
+4 & complete file lists ($m_\Rr = 205$, $m_\Tt = 62$) & $569$ & $<0.0005$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Stage~2 is the essential control: two jobs of a single production, differing
+only in random seed and proton count, are compatible in the observable that
+separates the productions by more than three orders of magnitude in $A^{2}$ at
+stage~4.
+
+\subsection{Complete comparison}
+
+At stage~4, with $2.33\times10^{9}$ test-sample muons over $62$ units and
+$m_\Rr = 205$ reference units, every observable and every charge selection
+rejects at the bound $\hat{p} < 5\times10^{-4}$. At this sample size the
+p-value has ceased to discriminate, since differences far below any level of
+physical relevance are resolvable. We therefore report effect sizes and the
+ordering of $A^{2}$.
+
+\begin{center}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Observable & $A^{2}$ (both) & $A^{2}$ ($\mu^+$) & $A^{2}$ ($\mu^-$) \\
+\midrule
+$\log_{10} p$              & $569.3$ & $226.8$ & $79.0$ \\
+$\log_{10} p_z$            & $569.7$ & $227.1$ & $79.0$ \\
+$r$                        & $324.2$ & $117.3$ & $52.6$ \\
+$\log_{10}\theta$          & $245.3$ & $96.7$  & $34.9$ \\
+$y$                        & $64.7$  & $24.0$  & $10.4$ \\
+$x$                        & $64.2$  & $22.8$  & $10.8$ \\
+$q\,x$                     & $63.4$  & $22.8$  & $10.7$ \\
+$\operatorname{arcsinh} p_T$ & $23.3$ & $10.1$  & $3.0$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{center}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Quantity & $\hat{\phi}_\Rr$ & $\hat{\phi}_\Tt$ & $\Delta$ \\
+\midrule
+$f(p>50~\mathrm{GeV})$        & $0.04861 \pm 0.00006$ & $0.04961 \pm 0.00012$ & $+2.06\%$ \\
+$f(p>100~\mathrm{GeV})$       & $0.00842 \pm 0.00003$ & $0.00858 \pm 0.00004$ & $+1.91\%$ \\
+$f(p_T>1~\mathrm{GeV})$       & $0.02674 \pm 0.00006$ & $0.02717 \pm 0.00008$ & $+1.60\%$ \\
+$f(\theta>20~\mathrm{mrad})$  & $0.67995 \pm 0.00019$ & $0.67649 \pm 0.00020$ & $-0.51\%$ \\
+$f(\theta>50~\mathrm{mrad})$  & $0.23674 \pm 0.00016$ & $0.23346 \pm 0.00017$ & $-1.39\%$ \\
+$\rho = N(\mu^+)/N(\mu^-)$    & $1.13765 \pm 0.00092$ & $1.12521 \pm 0.00130$ & $-1.09\%$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Uncertainties are bootstrap standard deviations over file units; see
+Remark~\ref{rem:pull} concerning their interpretation as normal deviates.
+
+\subsection{Interpretation}
+
+The ordering of $A^{2}$ does not constitute a set of independent findings. Since
+$\theta = \arctan(p_T/|p_z|)$ and $p_T$ ranks lowest, by a factor $24$ relative
+to $p$, the discrepancy in $\theta$ is consistent with being induced by that in
+$p$; and $r$, the radial coordinate at a fixed longitudinal position, follows
+from $\theta$. The observables $x$, $y$ and $q\,x$ rank an order of magnitude
+below $p$.
+
+The profile of $\log_{10} p$ shows a single-signed excursion of
+$\hat{F}_\Tt - \hat{F}_\Rr$ extending over the bulk of the spectrum, outside the
+$95\%$ envelope across several hundred consecutive bins, with $C_k$ rising
+monotonically and without a step. The discrepancy is therefore distributed over
+the spectrum rather than localised, and the absence of a sign change indicates
+that the positive excursions observed in the highest-momentum fractions are
+statistical fluctuations superposed on a monotone trend.
+
+In summary: the test production exhibits a harder muon momentum spectrum than
+the reference, by approximately $2\%$ in the fraction above $50$~GeV, with
+associated narrowing of the angular and radial distributions; the charge ratio
+is lower by approximately $1\%$; and all remaining observables differ by less.
+Whether differences of this magnitude are material is a question about the
+downstream application, not about the present analysis.
+
+\subsection{Limitations}
+
+\begin{enumerate}
+\item \textbf{Marginals only.} The procedure tests $d$ one-dimensional marginal
+distributions. An alternative in which the marginals agree but the dependence
+structure differs is not detected. A multivariate extension --- for instance an
+energy or kernel two-sample statistic~\cite{Szekely2004,Gretton2012}, or a
+classifier-based test~\cite{Friedman2003,Lopez2017} --- would address this and is
+not implemented.
+
+\item \textbf{Multiplicity.} Twenty-four tests ($8$ observables $\times$ $3$
+charge selections) are reported without correction. The observables are strongly
+dependent, so neither a Bonferroni bound nor an assumption of independence is
+appropriate; no valid joint statement about the family is made.
+
+\item \textbf{The pull is not a calibrated significance.} See
+Remark~\ref{rem:pull}. In particular, the number of effectively independent
+units may be smaller than $m$ if the weight is concentrated in few units, in
+which case $\hat{\sigma}$ is underestimated. This has not been quantified: the
+per-unit weight distribution should be examined and the effective number of
+units, $\left(\sum_f S_f\right)^2 \big/ \sum_f S_f^2$ with $S_f$ the total
+weight of unit $f$, reported.
+
+\item \textbf{Reproducibility of intermediate runs.} Two subsampled runs over
+the same file lists produced $\Delta = +2.76\%$ and $+0.07\%$ for
+$f(p>50~\mathrm{GeV})$, a spread exceeding the quoted uncertainties. As the
+charge ratio, which involves no cut, was likewise affected, this cannot be
+attributed to binning. The cause was not established. The complete-statistics
+results of this section are internally consistent, but the discrepancy is
+recorded as unresolved.
+
+\item \textbf{The geometric interpretation is an inference.} The claim that the
+$\theta$ and $r$ discrepancies are induced by that in $p$ rests on the ordering
+of $A^{2}$ and on the comparatively small discrepancy in $p_T$; it is not a
+quantitative demonstration. Reweighting $\Rr$ by the estimated ratio of momentum
+densities and retesting $\theta$ would provide one.
+
+\item \textbf{$\Neff$ for split samples.} By Proposition~\ref{prop:split},
+reported values of $\Neff$ for the test sample are upper bounds and must not be
+used to infer precision.
+\end{enumerate}
+
+% ===========================================================================
+\section{Summary}
+
+Comparison of weighted samples whose normalisation is arbitrary requires
+statistics invariant under independent rescaling of either sample, which
+excludes any procedure operating on absolute rates. Within that constraint, the
+weighted two-sample Anderson--Darling statistic calibrated by permutation of
+resampling units provides a test that is valid under the exchangeability
+hypothesis of Definition~\ref{def:h0} without assumptions on the underlying
+distributions, and whose weight function assigns to each region of the
+observable a contribution inversely proportional to its variance, as required
+when tail behaviour is of interest. Ratios of weighted sums within a sample,
+with uncertainties from a bootstrap over units, supply the complementary
+comparison of relative amounts with correlation-aware uncertainties.
+
+Proposition~\ref{prop:valid} establishes that the two principal approximations
+of the implementation --- the substitution of effective sample sizes for counts,
+and the discretisation of the empirical distribution functions --- affect the
+power of the procedure but not the validity of its p-values. The remaining
+approximations are quantified at runtime.
+
+\begin{thebibliography}{99}
+
+\bibitem{AndersonDarling1952}
+T.~W. Anderson and D.~A. Darling,
+\emph{Asymptotic theory of certain ``goodness of fit'' criteria based on
+stochastic processes},
+Ann.\ Math.\ Statist.\ \textbf{23} (1952) 193--212.
+
+\bibitem{AndersonDarling1954}
+T.~W. Anderson and D.~A. Darling,
+\emph{A test of goodness of fit},
+J.\ Amer.\ Statist.\ Assoc.\ \textbf{49} (1954) 765--769.
+
+\bibitem{Pettitt1976}
+A.~N. Pettitt,
+\emph{A two-sample Anderson--Darling rank statistic},
+Biometrika \textbf{63} (1976) 161--168.
+
+\bibitem{ScholzStephens1987}
+F.~W. Scholz and M.~A. Stephens,
+\emph{$k$-sample Anderson--Darling tests},
+J.\ Amer.\ Statist.\ Assoc.\ \textbf{82} (1987) 918--924.
+
+\bibitem{Stephens1974}
+M.~A. Stephens,
+\emph{EDF statistics for goodness of fit and some comparisons},
+J.\ Amer.\ Statist.\ Assoc.\ \textbf{69} (1974) 730--737.
+
+\bibitem{Cramer1928}
+H.~Cram\'er,
+\emph{On the composition of elementary errors},
+Skand.\ Aktuarietidskr.\ \textbf{11} (1928) 141--180.
+
+\bibitem{vonMises1928}
+R.~von Mises,
+\emph{Wahrscheinlichkeit, Statistik und Wahrheit}, Springer, 1928.
+
+\bibitem{Kolmogorov1933}
+A.~N. Kolmogorov,
+\emph{Sulla determinazione empirica di una legge di distribuzione},
+Giorn.\ Ist.\ Ital.\ Attuari \textbf{4} (1933) 83--91.
+
+\bibitem{Smirnov1939}
+N.~V. Smirnov,
+\emph{On the estimation of the discrepancy between empirical curves of
+distribution for two independent samples},
+Bull.\ Math.\ Univ.\ Moscou \textbf{2} (1939) 3--14.
+
+\bibitem{Fisher1935}
+R.~A. Fisher, \emph{The Design of Experiments}, Oliver and Boyd, 1935.
+
+\bibitem{Pitman1937}
+E.~J.~G. Pitman,
+\emph{Significance tests which may be applied to samples from any populations},
+Suppl.\ J.\ Roy.\ Statist.\ Soc.\ \textbf{4} (1937) 119--130.
+
+\bibitem{LehmannRomano2005}
+E.~L. Lehmann and J.~P. Romano,
+\emph{Testing Statistical Hypotheses}, 3rd ed., Springer, 2005, Ch.~15.
+
+\bibitem{PhipsonSmyth2010}
+B.~Phipson and G.~K. Smyth,
+\emph{Permutation p-values should never be zero: calculating exact p-values when
+permutations are randomly drawn},
+Stat.\ Appl.\ Genet.\ Mol.\ Biol.\ \textbf{9} (2010) Article~39.
+
+\bibitem{Kish1965}
+L.~Kish, \emph{Survey Sampling}, Wiley, 1965, Sec.~11.7.
+
+\bibitem{Efron1979}
+B.~Efron,
+\emph{Bootstrap methods: another look at the jackknife},
+Ann.\ Statist.\ \textbf{7} (1979) 1--26.
+
+\bibitem{DavisonHinkley1997}
+A.~C. Davison and D.~V. Hinkley,
+\emph{Bootstrap Methods and their Application}, Cambridge University Press,
+1997.
+
+\bibitem{Szekely2004}
+G.~J. Sz\'ekely and M.~L. Rizzo,
+\emph{Testing for equal distributions in high dimension},
+InterStat, November 2004.
+
+\bibitem{Gretton2012}
+A.~Gretton, K.~M. Borgwardt, M.~J. Rasch, B.~Sch\"olkopf and A.~Smola,
+\emph{A kernel two-sample test},
+J.\ Mach.\ Learn.\ Res.\ \textbf{13} (2012) 723--773.
+
+\bibitem{Friedman2003}
+J.~H. Friedman,
+\emph{On multivariate goodness of fit and two sample testing},
+eConf \textbf{C030908} (2003) THPD002.
+
+\bibitem{Lopez2017}
+D.~Lopez-Paz and M.~Oquab,
+\emph{Revisiting classifier two-sample tests},
+Proc.\ ICLR, 2017.
+
+\bibitem{ROOT}
+R.~Brun and F.~Rademakers,
+\emph{ROOT --- an object oriented data analysis framework},
+Nucl.\ Instrum.\ Meth.\ A \textbf{389} (1997) 81--86.
+
+\bibitem{RDataFrame}
+D.~Piparo, P.~Canal, E.~Guiraud \emph{et al.},
+\emph{RDataFrame: easy parallel ROOT analysis at 100 threads},
+EPJ Web Conf.\ \textbf{214} (2019) 06029.
+
+\end{thebibliography}
+
+\appendix
+\section{Procedure}
+
+\begin{lstlisting}[language=bash]
+# build and run the unit tests of Sec. 8.1
+cmake -S . -B build && cmake --build build -j && ctest --test-dir build
+
+# closure (Sec. 8.2)
+build/flux_compare REF.root --closure
+
+# calibration of the p-value distribution (Sec. 8.3)
+build/flux_compare REF.root --closure-scan 20 --nperm 200
+
+# weight audit (Sec. 8.5)
+build/flux_weight_audit REF.root TEST.root
+
+# comparison; the first argument is the reference sample
+build/flux_compare @ref.txt @test.txt \
+    --label-ref nosplit --label-test split100 \
+    --split-charge --nfine 2048 --nperm 2000 --outdir out
+\end{lstlisting}
+
+\noindent
+For each observable and charge selection the procedure emits: the two densities
+with a shape-ratio panel; the discrepancy profile of Sec.~\ref{sec:profile}; the
+permutation null of Eq.~\eqref{eq:pval} with the observed value indicated; and
+the per-bin effective sample size of Eq.~\eqref{eq:neff}.
+
+\end{document}

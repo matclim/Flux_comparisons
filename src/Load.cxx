@@ -1,6 +1,7 @@
-#include "muonflux/Load.h"
-#include "muonflux/Config.h"
-#include "muonflux/Log.h"
+
+#include "fluxval/Load.h"
+#include "fluxval/Config.h"
+#include "fluxval/Log.h"
  
 #include <ROOT/RDataFrame.hxx>
 #include <ROOT/RVec.hxx>
@@ -22,7 +23,7 @@
 #include <memory>
 #include <stdexcept>
  
-namespace mfl {
+namespace fluxval {
  
 using RVecD = ROOT::RVec<double>;
 using RVecI = ROOT::RVec<int>;
@@ -100,12 +101,16 @@ void streamAll(const std::vector<std::string>& files, const LoadOpts& o,
                const std::string& label, bool progress, Fn&& fn) {
   ROOT::RDataFrame df(o.tree, files);
   std::vector<std::string> paths = files;
-  auto node = df.DefinePerSample(
+  // RNode erases the node type, so Range can be applied conditionally without
+  // duplicating the whole event loop for the limited and unlimited cases.
+  ROOT::RDF::RNode node = df.DefinePerSample(
       "_fileIdx", [paths](unsigned, const ROOT::RDF::RSampleInfo& id) {
         for (size_t i = 0; i < paths.size(); ++i)
           if (id.Contains(paths[i])) return static_cast<int>(i);
         return 0;
       });
+  if (o.maxEvents > 0)
+    node = node.Range(0u, static_cast<unsigned>(o.maxEvents));
 #ifdef MFL_HAVE_RDF_PROGRESS
   // ROOT's own bar knows the total entry count, so it can show a percentage
   // and an ETA.  Only available from 6.30.
@@ -118,19 +123,7 @@ void streamAll(const std::vector<std::string>& files, const LoadOpts& o,
 #endif
   std::atomic<long long> muonCount{0};
  
-  const uint64_t keep = static_cast<uint64_t>(
-      std::llround(std::min(1.0, std::max(0.0, o.sampleFrac)) * 1000000.0));
- 
-  // Subsampling as a Filter, not a test inside the loop body.  RDataFrame
-  // reads a column only when its value is requested, so a rejected entry never
-  // deserialises the muon vectors -- which is where all the time goes.  Done
-  // inside the body (as it was), --sample-frac saved almost nothing.
-  auto sel = node.Filter(
-      [keep](int fidx, ULong64_t ent) {
-        if (keep >= 1000000ULL) return true;
-        return (mix((static_cast<uint64_t>(fidx) << 40) ^ ent) % 1000000ULL) < keep;
-      },
-      {"_fileIdx", "rdfentry_"});
+  ROOT::RDF::RNode& sel = node;
  
   if (o.source == "plane") {
     const std::string P = o.branch;
@@ -221,11 +214,11 @@ std::vector<std::string> splitList(const std::string& spec) {
   return out;
 }
  
-mfc::HistSpec probeRange(const std::vector<std::string>& fa,
+fluxval::HistSpec probeRange(const std::vector<std::string>& fa,
                          const std::vector<std::string>& fb, const LoadOpts& o) {
   std::vector<double> lo(kNVar, 1e300), hi(kNVar, -1e300);
   LoadOpts po = o;
-  po.sampleFrac = 1.0;
+  po.maxEvents = 0;
  
   auto probe = [&](const std::vector<std::string>& files) {
     if (files.empty()) return;
@@ -284,7 +277,7 @@ mfc::HistSpec probeRange(const std::vector<std::string>& fa,
   probe(fa);
   probe(fb);
  
-  mfc::HistSpec sp;
+  fluxval::HistSpec sp;
   sp.nvar = kNVar;
   sp.nfine = o.nfine;
   sp.lo.resize(kNVar);
@@ -309,8 +302,8 @@ mfc::HistSpec probeRange(const std::vector<std::string>& fa,
   return sp;
 }
  
-mfc::UnitHists loadHists(const std::vector<std::string>& files_in, const LoadOpts& o,
-                         const mfc::HistSpec& spec, const std::string& label) {
+fluxval::UnitHists loadHists(const std::vector<std::string>& files_in, const LoadOpts& o,
+                         const fluxval::HistSpec& spec, const std::string& label) {
   if (files_in.empty()) throw std::runtime_error("no input files for " + label);
   std::vector<std::string> files = files_in;
   if (o.maxFiles > 0 && static_cast<int>(files.size()) > o.maxFiles)
@@ -321,7 +314,7 @@ mfc::UnitHists loadHists(const std::vector<std::string>& files_in, const LoadOpt
   const int nUnits = byFile ? std::min(nFiles, o.maxUnits) : o.nBlocks;
  
   const unsigned nSlots = std::max(1u, ROOT::GetThreadPoolSize());
-  std::vector<mfc::UnitHists> per(nSlots);
+  std::vector<fluxval::UnitHists> per(nSlots);
   for (auto& u : per) u.alloc(spec, nUnits);
  
   logf("[io] %s: reading %d file(s)...", label.c_str(), nFiles);
@@ -336,7 +329,7 @@ mfc::UnitHists loadHists(const std::vector<std::string>& files_in, const LoadOpt
     per[s < nSlots ? s : 0].fillSign(unit, sgn, vals, w);
   });
  
-  mfc::UnitHists H;
+  fluxval::UnitHists H;
   H.alloc(spec, nUnits);
   for (const auto& u : per) H.merge(u);
   H.label = label;
@@ -355,4 +348,5 @@ mfc::UnitHists loadHists(const std::vector<std::string>& files_in, const LoadOpt
   return H;
 }
  
-}  // namespace mfl
+}  // namespace fluxval
+

@@ -1,4 +1,4 @@
-// muonflux_compare -- are the muons delivered by two productions compatible?
+// flux_compare -- are the muons delivered by two productions compatible?
 //
 // The first sample is the REFERENCE, the second is the TEST.  Everything is
 // reported as test relative to reference.
@@ -12,20 +12,20 @@
 //
 // sum(w) is used only as a denominator.  It is never compared, because it is
 // one of the things the productions vary on purpose.
- 
-#include "muonflux/Config.h"
-#include "muonflux/Core.h"
-#include "muonflux/Load.h"
-#include "muonflux/Log.h"
-#include "muonflux/Plot.h"
- 
+
+#include "fluxval/Config.h"
+#include "fluxval/Core.h"
+#include "fluxval/Load.h"
+#include "fluxval/Log.h"
+#include "fluxval/Plot.h"
+
 #include <TCanvas.h>
 #include <TFile.h>
 #include <TH1D.h>
 #include <TROOT.h>
 #include <TStopwatch.h>
 #include <TSystem.h>
- 
+
 #include <algorithm>
 #include <cmath>
 #include <cstdarg>
@@ -34,14 +34,14 @@
 #include <string>
 #include <stdexcept>
 #include <vector>
- 
+
 namespace {
- 
+
 struct Opts {
   std::string fileRef, fileTest, labelRef, labelTest;
   std::string outDir = "outputs";
-  std::string prefix = "muonflux";
-  mfl::LoadOpts load;
+  std::string prefix = "flux";
+  fluxval::LoadOpts load;
   int nperm = 500;
   int nboot = 400;
   int nbinsTest = 200;
@@ -57,7 +57,7 @@ struct Opts {
   bool png = false;
   std::vector<std::string> varNames;
 };
- 
+
 std::string sfmt(const char* f, ...) {
   char b[2048];
   va_list ap;
@@ -67,20 +67,20 @@ std::string sfmt(const char* f, ...) {
   return std::string(b);
 }
 std::string rule(int n) { return std::string(n, '-'); }
- 
+
 [[noreturn]] void usage(int code) {
-  std::printf(R"(muonflux_compare REFERENCE TEST [options]
- 
+  std::printf(R"(flux_compare REFERENCE TEST [options]
+
   REFERENCE, TEST   a .root file, a comma-separated list, a directory, or
                     @file-with-one-path-per-line.  All files of a sample are
                     read together as one dataset.
- 
+
   --label-ref S / --label-test S    legend labels
   --outdir DIR      output directory (default outputs/)
-  --prefix S        filename prefix (default muonflux)
+  --prefix S        filename prefix (default flux)
   --combined-pdf    also write one multi-page PDF alongside the per-plot files
   --png             also write a .png next to every .pdf
- 
+
   --tree NAME       default cbmsim
   --source S        plane | mctrack            (default plane)
   --branch NAME     scoring-plane branch (default PlaneHAPoint).  Any branch
@@ -92,11 +92,13 @@ std::string rule(int n) { return std::string(n, '-'); }
   --pmin X / --pmax X   GeV, default 5 / 400
   --vars LIST       subset of log10_p,log10_pz,asinh_pT,log10_theta,x,y,qx,r
   --split-sign      also run every shape test per sign class separately
- 
-  --sample-frac F   keep a deterministic random fraction of events (default 1)
+
+  --max-events N    read only the first N entries of each sample's file list.
+                    Deterministic (a prefix, not a random subset), but it
+                    disables multi-threading, so use it for quick checks only.
   --no-progress     suppress the progress bar (for batch logs)
   --max-files N     use only the first N files of each list
- 
+
   --nperm N         permutations (default 500)
   --nboot N         bootstrap replicas (default 400)
   --nfine N         fine bins per variable in the accumulator (default 2048)
@@ -109,7 +111,7 @@ std::string rule(int n) { return std::string(n, '-'); }
   --ad-clip X       drop bins with H(1-H) <= X
   --threads N       0 = all cores
   --seed N
- 
+
   --closure         ignore TEST: split REFERENCE in half by unit and compare it
                     with itself.  Run this first; every p-value should be flat.
   --closure-scan N  repeat that N times with different seeds and emit a P-P
@@ -118,7 +120,7 @@ std::string rule(int n) { return std::string(n, '-'); }
 )");
   std::exit(code);
 }
- 
+
 std::string shorten(const std::string& s, size_t n = 54) {
   return (s.size() <= n) ? s : "..." + s.substr(s.size() - (n - 3));
 }
@@ -128,7 +130,7 @@ std::string deriveLabel(const std::string& spec, size_t nfiles) {
   if (nfiles > 1) b += "  (" + std::to_string(nfiles) + " files)";
   return shorten(b);
 }
- 
+
 Opts parse(int argc, char** argv) {
   Opts o;
   std::vector<std::string> pos;
@@ -151,14 +153,14 @@ Opts parse(int argc, char** argv) {
     else if (a == "--branch" || a == "--plane") o.load.branch = next();
     else if (a == "--pdg") {
       o.load.pdgAbs.clear();
-      for (const std::string& v : mfl::splitList(next()))
+      for (const std::string& v : fluxval::splitList(next()))
         o.load.pdgAbs.push_back(std::abs(std::atoi(v.c_str())));
     }
     else if (a == "--pmin") o.load.pmin = std::atof(next().c_str());
     else if (a == "--pmax") o.load.pmax = std::atof(next().c_str());
-    else if (a == "--vars") o.varNames = mfl::splitList(next());
+    else if (a == "--vars") o.varNames = fluxval::splitList(next());
     else if (a == "--split-sign" || a == "--split-charge") o.splitCharge = true;
-    else if (a == "--sample-frac") o.load.sampleFrac = std::atof(next().c_str());
+    else if (a == "--max-events") o.load.maxEvents = std::atoll(next().c_str());
     else if (a == "--no-progress") o.load.progress = false;
     else if (a == "--max-files") o.load.maxFiles = std::atoi(next().c_str());
     else if (a == "--nperm") o.nperm = std::atoi(next().c_str());
@@ -184,27 +186,27 @@ Opts parse(int argc, char** argv) {
   o.fileTest = (pos.size() > 1) ? pos[1] : pos[0];
   return o;
 }
- 
+
 struct VarResult {
   int var = 0;
   std::string tag;
-  mfc::ShapeResult shape;
+  fluxval::ShapeResult shape;
   std::vector<int> fineEdges;
   std::vector<double> edges;
-  mfc::RatioBand band;
+  fluxval::RatioBand band;
   std::vector<double> neffRef, neffTest;
 };
- 
+
 }  // namespace
- 
+
 int runMain(int argc, char** argv) {
   const Opts o = parse(argc, argv);
   TStopwatch clock;
   clock.Start();
-  mfl::setStyle();
+  fluxval::setStyle();
   gSystem->mkdir(o.outDir.c_str(), kTRUE);
   const std::string base = o.outDir + "/" + o.prefix;
- 
+
   // One PDF per plot is the default; the combined book is opt-in.
   const std::string bookPdf = base + "_all.pdf";
   bool bookOpen = false;
@@ -220,62 +222,68 @@ int runMain(int argc, char** argv) {
     }
     ++pageNo;
   };
- 
-  const std::vector<std::string> filesRef = mfl::splitList(o.fileRef);
-  const std::vector<std::string> filesTest = mfl::splitList(o.fileTest);
- 
-  mfl::logf("================ muon flux compatibility ================");
-  mfl::logf("[cfg] reference : %zu file(s)", filesRef.size());
-  mfl::logf("[cfg] test      : %zu file(s)", o.closure ? 0 : filesTest.size());
- 
+
+  const std::vector<std::string> filesRef = fluxval::splitList(o.fileRef);
+  const std::vector<std::string> filesTest = fluxval::splitList(o.fileTest);
+
+  fluxval::logf("================ flux compatibility ================");
+  fluxval::logf("[cfg] reference : %zu file(s)", filesRef.size());
+  fluxval::logf("[cfg] test      : %zu file(s)", o.closure ? 0 : filesTest.size());
+
   // The probe uses Range(), which ROOT rejects under implicit MT, so the range
   // pass runs single-threaded and MT is enabled only for the real pass.
-  const mfc::HistSpec spec =
-      mfl::probeRange(filesRef, o.closure ? std::vector<std::string>{} : filesTest,
+  const fluxval::HistSpec spec =
+      fluxval::probeRange(filesRef, o.closure ? std::vector<std::string>{} : filesTest,
                       o.load);
-  for (int j = 0; j < mfl::kNVar; ++j)
-    mfl::logQuiet(sfmt("[cfg] range %-12s [%+.4g, %+.4g]", mfl::varDefs()[j].name,
+  for (int j = 0; j < fluxval::kNVar; ++j)
+    fluxval::logQuiet(sfmt("[cfg] range %-12s [%+.4g, %+.4g]", fluxval::varDefs()[j].name,
                        spec.lo[j], spec.hi[j]));
- 
-  ROOT::EnableImplicitMT(o.nthreads > 0 ? static_cast<unsigned>(o.nthreads) : 0u);
+
+  // RDataFrame rejects Range under implicit MT, so a limited read is
+  // single-threaded.  Stated rather than silently slow.
+  if (o.load.maxEvents > 0)
+    fluxval::logf("[cfg] --max-events %lld: reading single-threaded (Range and "
+                  "implicit MT are incompatible)", o.load.maxEvents);
+  else
+    ROOT::EnableImplicitMT(o.nthreads > 0 ? static_cast<unsigned>(o.nthreads) : 0u);
   const unsigned nSlots = std::max(1u, ROOT::GetThreadPoolSize());
-  const double mbPerSlot = double(o.load.maxUnits) * 2.0 * int(mfl::kNVar) * o.load.nfine * 8.0 /
+  const double mbPerSlot = double(o.load.maxUnits) * 2.0 * int(fluxval::kNVar) * o.load.nfine * 8.0 /
                            (1024.0 * 1024.0);
-  mfl::logf("[cfg] accumulator %.0f MB/thread x %u threads = %.0f MB", mbPerSlot,
+  fluxval::logf("[cfg] accumulator %.0f MB/thread x %u threads = %.0f MB", mbPerSlot,
             nSlots, mbPerSlot * nSlots);
- 
-  mfl::logf("[1/4] reading reference");
+
+  fluxval::logf("[1/4] reading reference");
   TStopwatch st;
   st.Start();
-  mfc::UnitHists Ref = mfl::loadHists(filesRef, o.load, spec, "reference");
-  mfl::logf("[1/4] done in %.0f s", st.RealTime());
-  mfc::UnitHists Test;
+  fluxval::UnitHists Ref = fluxval::loadHists(filesRef, o.load, spec, "reference");
+  fluxval::logf("[1/4] done in %.0f s", st.RealTime());
+  fluxval::UnitHists Test;
   std::string labRef = o.labelRef.empty() ? deriveLabel(o.fileRef, filesRef.size())
                                           : o.labelRef;
   std::string labTest = o.labelTest.empty()
                             ? deriveLabel(o.fileTest, filesTest.size())
                             : o.labelTest;
- 
+
   if (o.closure || o.closureScan > 0) {
-    auto h = mfc::splitUnits(Ref, o.seed ^ 0xABCDEF);
+    auto h = fluxval::splitUnits(Ref, o.seed ^ 0xABCDEF);
     labTest = labRef + "  [closure half 2]";
     labRef += "  [closure half 1]";
     Test = h.second;
     Ref = h.first;
-    mfl::logf("[closure] reference split into %d / %d units", Ref.nUnits, Test.nUnits);
+    fluxval::logf("[closure] reference split into %d / %d units", Ref.nUnits, Test.nUnits);
   } else {
-    mfl::logf("[2/4] reading test");
+    fluxval::logf("[2/4] reading test");
     st.Start();
-    Test = mfl::loadHists(filesTest, o.load, spec, "test");
-    mfl::logf("[2/4] done in %.0f s", st.RealTime());
+    Test = fluxval::loadHists(filesTest, o.load, spec, "test");
+    fluxval::logf("[2/4] done in %.0f s", st.RealTime());
   }
- 
-  mfl::logf("[rate] sum(w): ref = %.6g   test = %.6g   ratio = %.4g", Ref.totalW(),
+
+  fluxval::logf("[rate] sum(w): ref = %.6g   test = %.6g   ratio = %.4g", Ref.totalW(),
             Test.totalW(), Ref.totalW() > 0 ? Test.totalW() / Ref.totalW() : 0.0);
-  mfl::logf("[rate] NOT compared -- it is varied on purpose. Denominator only.");
- 
-  const mfl::Species sp = mfl::makeSpecies(o.load.pdgAbs);
-  mfl::logf("[cfg] species    %s (|PDG| =%s)%s", sp.name.c_str(),
+  fluxval::logf("[rate] NOT compared -- it is varied on purpose. Denominator only.");
+
+  const fluxval::Species sp = fluxval::makeSpecies(o.load.pdgAbs);
+  fluxval::logf("[cfg] species    %s (|PDG| =%s)%s", sp.name.c_str(),
             [&] {
               static std::string t;
               t.clear();
@@ -283,17 +291,17 @@ int runMain(int argc, char** argv) {
               return t.c_str();
             }(),
             sp.neutral ? "  -- neutral: q*x dropped, sign split is nu/nubar" : "");
- 
-  const auto& defs = mfl::varDefs();
+
+  const auto& defs = fluxval::varDefs();
   std::vector<int> vars;
   if (o.varNames.empty()) {
-    vars = mfl::defaultVars(sp);
+    vars = fluxval::defaultVars(sp);
   } else {
     for (const std::string& nm : o.varNames) {
       int f = -1;
-      for (int j = 0; j < mfl::kNVar; ++j) if (nm == defs[j].name) f = j;
+      for (int j = 0; j < fluxval::kNVar; ++j) if (nm == defs[j].name) f = j;
       if (f < 0) { std::printf("unknown variable '%s'\n", nm.c_str()); return 2; }
-      if (sp.neutral && f == mfl::kQX) {
+      if (sp.neutral && f == fluxval::kQX) {
         std::printf("qx is identically zero for a neutral species; drop it from "
                     "--vars\n");
         return 2;
@@ -301,22 +309,22 @@ int runMain(int argc, char** argv) {
       vars.push_back(f);
     }
   }
- 
+
   // ---------------- calibration scan ----------------
   if (o.closureScan > 0) {
-    mfl::logf("");
-    mfl::logf("---- closure scan: %d independent splits of the reference ----",
+    fluxval::logf("");
+    fluxval::logf("---- closure scan: %d independent splits of the reference ----",
               o.closureScan);
     std::vector<std::vector<double>> pv(vars.size());
     std::vector<std::string> names;
     for (int j : vars) names.push_back(defs[j].name);
     for (int t = 0; t < o.closureScan; ++t) {
-      auto h = mfc::splitUnits(Ref, o.seed + 1000u * (t + 1));
+      auto h = fluxval::splitUnits(Ref, o.seed + 1000u * (t + 1));
       for (size_t vi = 0; vi < vars.size(); ++vi) {
         const std::vector<int> fe =
-            mfc::equalWeightFineEdges(h.first, h.second, vars[vi], -1, o.nbinsTest);
-        pv[vi].push_back(mfc::shapeTest(
-                             mfc::buildPooledFromHists(h.first, h.second, vars[vi], -1, fe),
+            fluxval::equalWeightFineEdges(h.first, h.second, vars[vi], -1, o.nbinsTest);
+        pv[vi].push_back(fluxval::shapeTest(
+                             fluxval::buildPooledFromHists(h.first, h.second, vars[vi], -1, fe),
                              names[vi], o.nperm, o.seed + 7777u * (t + 1) + vi,
                              o.nthreads, o.adClip)
                              .pAD);
@@ -325,9 +333,9 @@ int runMain(int argc, char** argv) {
       std::fflush(stdout);
     }
     std::printf("\r                    \r");
-    mfl::logf("%-14s %8s %8s %10s %11s", "variable", "mean p", "median", "frac<0.05",
+    fluxval::logf("%-14s %8s %8s %10s %11s", "variable", "mean p", "median", "frac<0.05",
               "KS vs unif");
-    mfl::logf("%s", rule(56).c_str());
+    fluxval::logf("%s", rule(56).c_str());
     for (size_t vi = 0; vi < vars.size(); ++vi) {
       std::vector<double> p = pv[vi];
       std::sort(p.begin(), p.end());
@@ -340,51 +348,51 @@ int runMain(int argc, char** argv) {
       for (int k = 0; k < n; ++k)
         D = std::max(D, std::max(std::fabs((k + 1.0) / n - p[k]),
                                  std::fabs(p[k] - double(k) / n)));
-      mfl::logf("%-14s %8.3f %8.3f %10.2f %11.3f", names[vi].c_str(), m, p[n / 2],
+      fluxval::logf("%-14s %8.3f %8.3f %10.2f %11.3f", names[vi].c_str(), m, p[n / 2],
                 double(below) / n, D);
     }
-    mfl::logf("%s", rule(56).c_str());
-    mfl::logf("Calibrated: mean p ~ 0.50, frac<0.05 ~ 0.05.");
-    mfl::logf("Above 0.50 = conservative (misses real differences).");
-    mfl::logf("Below 0.50 = anti-conservative (p-values not trustworthy).");
- 
+    fluxval::logf("%s", rule(56).c_str());
+    fluxval::logf("Calibrated: mean p ~ 0.50, frac<0.05 ~ 0.05.");
+    fluxval::logf("Above 0.50 = conservative (misses real differences).");
+    fluxval::logf("Below 0.50 = anti-conservative (p-values not trustworthy).");
+
     c = new TCanvas("c", "scan", 950, 780);
-    mfl::drawPP(c, names, pv);
+    fluxval::drawPP(c, names, pv);
     emit("pp_calibration");
-    std::vector<std::string> L(mfl::logLines());
+    std::vector<std::string> L(fluxval::logLines());
     for (size_t q = 0; q < L.size(); q += 34) {
-      mfl::drawTextPage(c, "closure scan -- summary",
+      fluxval::drawTextPage(c, "closure scan -- summary",
                         {L.begin() + q, L.begin() + std::min(L.size(), q + 34)});
       emit("summary");
     }
     if (bookOpen) c->Print((bookPdf + "]").c_str());
-    mfl::writeLog(base + ".txt");
+    fluxval::writeLog(base + ".txt");
     std::printf("[out] %d plot file(s) and %s.txt in %s/\n", pageNo, o.prefix.c_str(),
                 o.outDir.c_str());
     return 0;
   }
- 
+
   // ---------------- tests 1 and 2 ----------------
-  const std::vector<mfc::Region> regs = mfl::defaultRegions(sp);
-  const std::vector<mfc::Quantity> qs = mfl::defaultQuantities(sp, regs);
-  mfl::logf("[3/4] fractions and bootstrap (%d replicas)", o.nboot);
+  const std::vector<fluxval::Region> regs = fluxval::defaultRegions(sp);
+  const std::vector<fluxval::Quantity> qs = fluxval::defaultQuantities(sp, regs);
+  fluxval::logf("[3/4] fractions and bootstrap (%d replicas)", o.nboot);
   st.Start();
-  const std::vector<mfc::QuantityResult> qres = mfc::compareQuantitySums(
-      mfc::unitSumsFromHists(Ref, regs), mfc::unitSumsFromHists(Test, regs), qs,
+  const std::vector<fluxval::QuantityResult> qres = fluxval::compareQuantitySums(
+      fluxval::unitSumsFromHists(Ref, regs), fluxval::unitSumsFromHists(Test, regs), qs,
       o.nboot, o.seed);
- 
-  mfl::logf("[3/4] done in %.0f s", st.RealTime());
+
+  fluxval::logf("[3/4] done in %.0f s", st.RealTime());
   std::vector<std::string> summary;
   auto say = [&](const std::string& s) {
     summary.push_back(s);
-    mfl::logLine(s);
+    fluxval::logLine(s);
   };
   auto fmtPM = [](double v, double e, bool ok) {
     if (!ok) return sfmt("%16s", "--");
     if (std::fabs(v) >= 1e-3 || v == 0.0) return sfmt("%7.5f+-%-7.5f", v, e);
     return sfmt("%8.2e+-%-6.1e", v, e);
   };
- 
+
   say("");
   say(sfmt("---- tests 1 & 2: scale-free amounts (bootstrap unit: %s) ----",
            Ref.unitsAreFiles ? "files" : "event blocks"));
@@ -409,7 +417,7 @@ int runMain(int argc, char** argv) {
   if (nDead)
     say(sfmt("%d marked '--': empty region, or known to worse than 50%%, so there is "
              "nothing to compare (not a null result).", nDead));
- 
+
   // ---------------- test 3 ----------------
   std::vector<std::pair<std::string, int>> charges = {{"both", -1}};
   if (o.splitCharge) {
@@ -420,17 +428,17 @@ int runMain(int argc, char** argv) {
   // substrate is binned; an artefact from a sharp feature straddling a bin
   // edge does.  Merging fine bins is exact, so all three resolutions come from
   // the single read already done -- no extra I/O.
-  std::vector<mfc::UnitHists> refGrid{Ref}, testGrid{Test};
+  std::vector<fluxval::UnitHists> refGrid{Ref}, testGrid{Test};
   std::vector<int> gridFactor{1};
   if (o.binningCheck) {
     for (int f : {4, 16}) {
       if (Ref.spec.nfine % f != 0 || Ref.spec.nfine / f < 64) continue;
-      refGrid.push_back(mfc::coarsenFine(Ref, f));
-      testGrid.push_back(mfc::coarsenFine(Test, f));
+      refGrid.push_back(fluxval::coarsenFine(Ref, f));
+      testGrid.push_back(fluxval::coarsenFine(Test, f));
       gridFactor.push_back(f);
     }
   }
- 
+
   std::vector<VarResult> results;
   for (const auto& ch : charges) {
     say("");
@@ -454,27 +462,27 @@ int runMain(int argc, char** argv) {
       VarResult v;
       v.var = j;
       v.tag = ch.first;
-      v.fineEdges = mfc::equalWeightFineEdges(Ref, Test, j, ch.second, o.nbinsTest);
-      v.shape = mfc::shapeTest(
-          mfc::buildPooledFromHists(Ref, Test, j, ch.second, v.fineEdges), defs[j].name,
+      v.fineEdges = fluxval::equalWeightFineEdges(Ref, Test, j, ch.second, o.nbinsTest);
+      v.shape = fluxval::shapeTest(
+          fluxval::buildPooledFromHists(Ref, Test, j, ch.second, v.fineEdges), defs[j].name,
           o.nperm, o.seed + 100u * j, o.nthreads, o.adClip);
       const std::vector<int> pe =
-          mfc::equalWeightFineEdges(Ref, Test, j, ch.second, o.nbinsPlot);
-      v.edges = mfc::edgeValues(spec, j, pe);
-      v.band = mfc::shapeRatioFromHists(Ref, Test, j, ch.second, pe, o.nboot,
+          fluxval::equalWeightFineEdges(Ref, Test, j, ch.second, o.nbinsPlot);
+      v.edges = fluxval::edgeValues(spec, j, pe);
+      v.band = fluxval::shapeRatioFromHists(Ref, Test, j, ch.second, pe, o.nboot,
                                         o.seed + 200u * j);
-      v.neffRef = mfc::nEffPerBinFromHists(Ref, j, ch.second, pe);
-      v.neffTest = mfc::nEffPerBinFromHists(Test, j, ch.second, pe);
+      v.neffRef = fluxval::nEffPerBinFromHists(Ref, j, ch.second, pe);
+      v.neffTest = fluxval::nEffPerBinFromHists(Test, j, ch.second, pe);
       // Same statistic on progressively coarser substrates, no permutations
       // needed -- only the value matters, not its p-value.
       std::string stab;
       double worst = 1.0;
       for (size_t gi = 1; gi < refGrid.size(); ++gi) {
         const std::vector<int> fe =
-            mfc::equalWeightFineEdges(refGrid[gi], testGrid[gi], j, ch.second,
+            fluxval::equalWeightFineEdges(refGrid[gi], testGrid[gi], j, ch.second,
                                       o.nbinsTest);
         const double a2 =
-            mfc::shapeTest(mfc::buildPooledFromHists(refGrid[gi], testGrid[gi], j,
+            fluxval::shapeTest(fluxval::buildPooledFromHists(refGrid[gi], testGrid[gi], j,
                                                      ch.second, fe),
                            defs[j].name, 0, o.seed, o.nthreads, o.adClip)
                 .obs.AD;
@@ -509,9 +517,9 @@ int runMain(int argc, char** argv) {
         say("All variables stable against the grid.");
     }
   }
- 
+
   // ---------------- output ----------------
-  c = new TCanvas("c", "muonflux", 950, 780);
+  c = new TCanvas("c", "flux", 950, 780);
   std::vector<std::string> header = {
       "reference : " + labRef, "test      : " + labTest, "",
       sfmt("source        %s, branch %s", o.load.source.c_str(),
@@ -525,40 +533,40 @@ int runMain(int argc, char** argv) {
       sfmt("sum(w) ratio  %.4g   -- recorded, never tested",
            Ref.totalW() > 0 ? Test.totalW() / Ref.totalW() : 0.0),
       sfmt("accumulator   %d fine bins, %d units", o.load.nfine, Ref.nUnits),
-      sfmt("sample-frac   %.4g", o.load.sampleFrac), ""};
+      sfmt("max-events    %lld  (0 = all)", o.load.maxEvents), ""};
   header.insert(header.end(), summary.begin(), summary.end());
   for (size_t p = 0; p < header.size(); p += 34) {
-    mfl::drawTextPage(c, p == 0 ? "muon flux compatibility -- summary"
+    fluxval::drawTextPage(c, p == 0 ? "flux compatibility -- summary"
                                 : "summary (continued)",
                       {header.begin() + p,
                        header.begin() + std::min(header.size(), p + 34)});
     emit("summary");
   }
- 
-  mfl::drawQuantityPulls(c, qres, labRef, labTest);
+
+  fluxval::drawQuantityPulls(c, qres, labRef, labTest);
   emit("fractions");
   // One p-value page per charge selection: stacking all three in a single
   // frame gave three unlabelled blocks of identical variable names.
   for (const auto& ch : charges) {
-    std::vector<mfc::ShapeResult> all;
+    std::vector<fluxval::ShapeResult> all;
     for (const VarResult& v : results)
       if (v.tag == ch.first) all.push_back(v.shape);
     if (all.empty()) continue;
-    mfl::drawPValueOverview(c, all, ch.first, labRef, labTest);
+    fluxval::drawPValueOverview(c, all, ch.first, labRef, labTest);
     emit("pvalues_" + ch.first);
   }
- 
+
   TFile fo((base + ".root").c_str(), "RECREATE");
   for (const VarResult& v : results) {
     const std::string sfx = std::string(defs[v.var].name) + "_" + v.tag;
-    TH1D* hR = mfl::densityHist(("ref_" + sfx).c_str(), v.edges, v.band.shapeA,
+    TH1D* hR = fluxval::densityHist(("ref_" + sfx).c_str(), v.edges, v.band.shapeA,
                                 v.band.errA);
-    TH1D* hT = mfl::densityHist(("test_" + sfx).c_str(), v.edges, v.band.shapeB,
+    TH1D* hT = fluxval::densityHist(("test_" + sfx).c_str(), v.edges, v.band.shapeB,
                                 v.band.errB);
-    TH1D* hRat = mfl::ratioHist(("ratio_" + sfx).c_str(), v.edges, v.band.ratio,
+    TH1D* hRat = fluxval::ratioHist(("ratio_" + sfx).c_str(), v.edges, v.band.ratio,
                                 v.band.err);
     const bool fl = v.shape.pAD <= 1.0 / (o.nperm + 1.0) + 1e-12;
-    mfl::drawWithRatio(c, hR, hT, hRat, defs[v.var].axis, defs[v.var].logyPlot, labRef,
+    fluxval::drawWithRatio(c, hR, hT, hRat, defs[v.var].axis, defs[v.var].logyPlot, labRef,
                        labTest,
                        sfmt("%s [%s]   A^{2} = %.4g,  p %s %.3g", defs[v.var].name,
                             v.tag.c_str(), v.shape.obs.AD, fl ? "<" : "", v.shape.pAD));
@@ -569,30 +577,30 @@ int runMain(int argc, char** argv) {
     hRat->Write();
   }
   for (const VarResult& v : results) {
-    mfl::drawProfile(c, v.shape, defs[v.var].axis, v.tag, labRef, labTest);
+    fluxval::drawProfile(c, v.shape, defs[v.var].axis, v.tag, labRef, labTest);
     emit(sfmt("profile_%s_%s", defs[v.var].name, v.tag.c_str()));
   }
   for (const VarResult& v : results) {
-    mfl::drawNull(c, v.shape);
+    fluxval::drawNull(c, v.shape);
     emit(sfmt("null_%s_%s", defs[v.var].name, v.tag.c_str()));
   }
   for (const VarResult& v : results) {
-    mfl::drawNeff(c, v.edges, v.neffRef, v.neffTest,
+    fluxval::drawNeff(c, v.edges, v.neffRef, v.neffTest,
                   std::string(defs[v.var].axis) + "   [" + v.tag + "]", labRef, labTest);
     emit(sfmt("neff_%s_%s", defs[v.var].name, v.tag.c_str()));
   }
   if (bookOpen) c->Print((bookPdf + "]").c_str());
   fo.Close();
- 
-  mfl::logf("");
-  mfl::logf("[out] %d plot file(s) in %s/", pageNo, o.outDir.c_str());
-  mfl::logf("[out] %s.root", base.c_str());
-  mfl::logf("[time] %.1f s", clock.RealTime());
-  mfl::writeLog(base + ".txt");
+
+  fluxval::logf("");
+  fluxval::logf("[out] %d plot file(s) in %s/", pageNo, o.outDir.c_str());
+  fluxval::logf("[out] %s.root", base.c_str());
+  fluxval::logf("[time] %.1f s", clock.RealTime());
+  fluxval::writeLog(base + ".txt");
   std::printf("[out] %s.txt\n", base.c_str());
   return 0;
 }
- 
+
 int main(int argc, char** argv) {
   // A single unreadable path in a 150-line file list used to abort with an
   // uncaught exception and a core dump, which said nothing about which path.
